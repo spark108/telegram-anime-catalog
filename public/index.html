@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Аниме из Telegram</title>
+  <link rel="stylesheet" href="/vendor/codemirror.css">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/vendor/codemirror.js" defer></script>
+  <script src="/vendor/codemirror-javascript.js" defer></script>
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header id="app-header" class="app-header" hidden>
+    <nav class="app-tabs" aria-label="Разделы">
+      <button type="button" data-view="catalog" aria-current="page">Каталог</button>
+      <button type="button" data-view="tracking">Отслеживание</button>
+      <button type="button" data-view="publication">Публикация</button>
+      <button type="button" data-view="review">На проверку</button>
+      <button type="button" data-view="sources">Источники</button>
+    </nav>
+    <button type="button" id="logout">Выйти</button>
+  </header>
+  <main>
+    <p id="notice" role="alert" hidden></p>
+    <section id="login-scene">
+      <form id="unlock" class="panel row" hidden>
+        <input name="key" type="password" aria-label="Ключ доступа" placeholder="Ключ доступа" required>
+        <button>Открыть каталог</button>
+      </form>
+      <div id="auth" class="panel">
+        <h2>Вход в Telegram</h2>
+        <p id="auth-status" role="status">Подключение к Telegram…</p>
+        <form id="login" hidden>
+          <div class="fields">
+            <label data-app-credentials>API ID <input name="apiId" inputmode="numeric"></label>
+            <label data-app-credentials>API Hash <input name="apiHash" type="password" autocomplete="off"></label>
+            <label>Номер телефона <input name="phone" type="tel" autocomplete="tel" placeholder="+79991234567" required></label>
+          </div>
+          <p data-app-credentials>Войдите на <a href="https://my.telegram.org/apps" target="_blank" rel="noreferrer">my.telegram.org</a>, откройте <strong>API development tools</strong> и создайте приложение. Скопируйте оттуда API ID и API Hash.</p>
+          <div class="row">
+            <button>Отправить код</button>
+            <button type="button" id="login-qr">Войти по QR-коду</button>
+          </div>
+        </form>
+        <div id="qr-login" hidden>
+          <p>В Telegram на телефоне откройте «Настройки → Устройства → Подключить устройство» и отсканируйте код.</p>
+          <img id="qr-image" width="260" height="260" alt="QR-код для входа в Telegram" hidden>
+          <p id="qr-renewing" role="status" hidden>Обновляем QR-код…</p>
+        </div>
+        <form id="answer" hidden>
+          <label><span id="answer-label"></span><input name="value" required></label>
+          <button>Подтвердить</button>
+        </form>
+        <button type="button" id="cancel-login" hidden>Отменить вход</button>
+      </div>
+    </section>
+    <section id="sources" hidden>
+      <div id="source-panel" class="panel">
+        <h2>Источники</h2>
+        <p id="sources-empty" class="muted" hidden>Источники пока не подключены.</p>
+        <div id="source-list"></div>
+        <h3>Подключить источники</h3>
+        <form id="add-source">
+          <input type="search" id="source-dialog-search" aria-label="Поиск чатов" placeholder="Поиск по названию или @имени">
+          <nav class="source-tabs source-dialog-tabs" aria-label="Тип источника">
+            <button type="button" data-dialog-category="chats" aria-pressed="true">Чаты</button>
+            <button type="button" data-dialog-category="groups" aria-pressed="false">Группы</button>
+            <button type="button" data-dialog-category="channels" aria-pressed="false">Каналы</button>
+          </nav>
+          <div id="source-dialogs" class="source-dialogs" aria-label="Доступные чаты"></div>
+          <p id="source-dialogs-status" role="status"></p>
+          <div class="row">
+            <button disabled>Подключить выбранные</button>
+            <button type="button" id="load-dialogs">Обновить список чатов</button>
+          </div>
+        </form>
+        <details id="local-access" hidden><summary>Ключ доступа с другого устройства</summary><pre id="access-key"></pre></details>
+      </div>
+      <template id="source-template">
+        <details class="source-card" name="connected-sources">
+          <summary><strong data-source-title></strong> <span data-source-status class="muted"></span></summary>
+          <div class="source-card-body">
+            <nav class="source-tabs" aria-label="Разделы источника">
+              <button type="button" data-source-tab="analyzer" aria-pressed="true">Анализатор</button>
+              <button type="button" data-source-tab="preview" aria-pressed="false">Проверка</button>
+              <button type="button" data-source-tab="status" aria-pressed="false">Состояние</button>
+            </nav>
+            <form data-source-pane="analyzer">
+              <div class="row source-library">
+                <select name="analyzerFile" aria-label="Анализаторы по умолчанию" disabled></select>
+                <button type="button" data-load-analyzer disabled>Загрузить из анализаторов по умолчанию</button>
+              </div>
+              <label>JavaScript <textarea name="code" class="code" rows="18" spellcheck="false" required></textarea></label>
+              <button disabled>Сохранить и запустить анализ</button>
+              <p data-analyzer-status role="status" hidden></p>
+            </form>
+            <form data-source-pane="preview" hidden>
+              <div class="row">
+                <button type="button" data-load-samples>Обновить примеры</button>
+                <select name="samples" aria-label="Сообщение для проверки"></select>
+              </div>
+              <label>Текст или подпись <textarea name="text" rows="4"></textarea></label>
+              <label>Метаданные вложений (JSON) <textarea name="attachments" class="code" rows="4">[]</textarea></label>
+              <button disabled>Проверить</button>
+              <pre data-preview-result aria-live="polite" hidden></pre>
+            </form>
+            <div data-source-pane="status" hidden>
+              <p data-source-progress></p>
+              <ul data-source-errors hidden></ul>
+              <button type="button" data-detach-source>Отвязать источник</button>
+            </div>
+          </div>
+        </details>
+      </template>
+    </section>
+    <section id="catalog" hidden>
+      <div class="catalog-heading">
+        <h2>Каталог</h2>
+        <form id="search" class="row">
+          <input name="q" type="search" aria-label="Название" placeholder="Название аниме">
+          <button>Найти</button>
+        </form>
+      </div>
+      <div class="catalog-layout">
+        <aside class="panel catalog-sidebar" aria-labelledby="catalog-filter-title">
+          <h3 id="catalog-filter-title">Фильтры</h3>
+          <form id="catalog-filters">
+            <fieldset>
+              <legend>Отслеживание</legend>
+              <label><input type="radio" name="tracking" value="all" checked> Все тайтлы</label>
+              <label class="catalog-subfilter"><input type="checkbox" name="includeBlacklist" checked> Черный список</label>
+              <label><input type="radio" name="tracking" value="tracked"> Только отслеживаемые</label>
+              <label class="catalog-subfilter"><input type="checkbox" name="onlyUnread" disabled> Только непрочитанные</label>
+              <label><input type="radio" name="tracking" value="untracked"> Только не отслеживаемые</label>
+              <label><input type="radio" name="tracking" value="blacklisted"> Черный список</label>
+            </fieldset>
+            <fieldset>
+              <legend>Материалы</legend>
+              <label><input type="radio" name="material" value="all" checked> Все материалы</label>
+              <label><input type="radio" name="material" value="voiceovers"> Только озвучка</label>
+              <label><input type="radio" name="material" value="subtitles"> Только субтитры</label>
+            </fieldset>
+            <fieldset><legend>Озвучки</legend><div id="filter-voiceovers" class="catalog-filter-options"></div></fieldset>
+            <fieldset><legend>Субтитры</legend><div id="filter-subtitles" class="catalog-filter-options"></div></fieldset>
+            <fieldset><legend>Год</legend><div id="filter-years" class="catalog-filter-options"></div></fieldset>
+          </form>
+        </aside>
+        <div class="catalog-results">
+          <ul id="catalog-list" class="poster-grid"></ul>
+          <button type="button" id="more-catalog" hidden>Ещё тайтлы</button>
+        </div>
+      </div>
+    </section>
+    <section id="details" hidden>
+      <a id="back-catalog" class="back-link" href="/?view=catalog">← К каталогу</a>
+      <article class="panel anime-hero">
+        <div id="anime-poster-card" class="poster-card anime-poster-card">
+          <div class="poster-visual">
+            <div id="anime-poster" class="poster-frame"></div>
+            <span id="anime-poster-status" class="poster-status" role="img" hidden></span>
+          </div>
+        </div>
+        <div>
+          <h2 id="anime-title" class="anime-title"></h2>
+          <p id="anime-tracked" class="tracking-status" hidden>Отслеживается</p>
+          <p id="anime-original" class="muted" hidden></p>
+          <p id="anime-aliases" class="muted" hidden></p>
+          <ul id="anime-facts" class="anime-facts" hidden></ul>
+          <p id="anime-genres" class="muted" hidden></p>
+          <p id="anime-description" class="anime-description"></p>
+          <a id="anime-shikimori" target="_blank" rel="noreferrer" hidden>На Shikimori ↗</a>
+        </div>
+      </article>
+      <details id="anime-merge" class="panel" hidden>
+        <summary>Объединить с другим тайтлом</summary>
+        <p>Текущая карточка станет основной. Название выбранного тайтла станет альтернативным.</p>
+        <form class="row" id="anime-merge-search">
+          <input name="q" type="search" aria-label="Название тайтла для объединения" placeholder="Название тайтла" required>
+          <button>Найти</button>
+        </form>
+        <form class="row" id="anime-merge-confirm" hidden>
+          <select name="sourceId" aria-label="Тайтл для объединения" required></select>
+          <button>Объединить</button>
+        </form>
+        <p id="anime-merge-status" role="status" hidden></p>
+      </details>
+      <div class="episode-section">
+        <div class="episode-section-heading">
+          <h2>Серии</h2>
+          <div class="row episode-section-actions">
+            <select id="episode-material" aria-label="Материалы серий">
+              <option value="all">Все</option>
+              <option value="dubbed-video">Видео с озвучкой</option>
+              <option value="subtitled-video">Видео с субтитрами</option>
+              <option value="subtitle">Субтитры</option>
+            </select>
+            <button type="button" id="episode-read-all" disabled>Прочитать всё</button>
+          </div>
+        </div>
+        <div id="anime-episodes"></div>
+      </div>
+    </section>
+    <section id="tracking" class="panel" hidden>
+      <nav class="tracking-tabs" aria-label="Списки тайтлов">
+        <button type="button" data-tracking-list="tracked" aria-current="page">Отслеживание</button>
+        <button type="button" data-tracking-list="blacklist">Черный список</button>
+      </nav>
+      <ul id="tracking-list" class="entries tracking-list"></ul>
+    </section>
+    <section id="publication" class="panel" hidden>
+      <h2>Настройки публикации</h2>
+      <form id="publication-settings" hidden>
+        <fieldset class="publication-channels">
+          <legend>Места публикации</legend>
+          <div class="publication-tabs" role="tablist" aria-label="Места публикации">
+            <button type="button" id="publication-channel-tab" role="tab" aria-selected="true" aria-controls="publication-channel-list">Каналы</button>
+            <button type="button" id="publication-group-tab" role="tab" aria-selected="false" aria-controls="publication-group-list" tabindex="-1">Группы</button>
+          </div>
+          <div id="publication-channel-list" role="tabpanel" aria-labelledby="publication-channel-tab"></div>
+          <div id="publication-group-list" role="tabpanel" aria-labelledby="publication-group-tab" hidden></div>
+        </fieldset>
+        <fieldset class="publication-channels">
+          <legend>Пересылка</legend>
+          <label class="publication-channel"><input type="checkbox" name="originalCaption" value="originalCaption"> Пересылать с исходной подписью</label>
+          <label class="publication-channel"><input type="checkbox" name="originalAuthor" value="originalAuthor"> Пересылать с исходным автором</label>
+          <p class="muted">Шаблон подписи применяется, когда обе галочки сняты.</p>
+        </fieldset>
+        <label for="caption-script">Шаблон подписи (JavaScript)</label>
+        <textarea id="caption-script" name="template" class="code" rows="9" maxlength="65536" spellcheck="false"></textarea>
+        <details class="template-fields">
+          <summary>Поля шаблона</summary>
+          <p>Функция <code>caption(data)</code> возвращает массив. Каждый строковый элемент становится отдельной строкой. <code>null</code>, <code>undefined</code> и <code>false</code> пропускаются. Пустой массив отправляет файл без подписи.</p>
+          <p><code>data.title</code>, <code>season</code>, <code>episode</code>, <code>year</code>, <code>voiceover</code>, <code>audioVariant</code>, <code>subtitles?.author</code>.</p>
+          <p><code>data.fileName</code>, <code>format</code>, <code>resolution</code>, <code>attachment.kind</code> (<code>video</code> или <code>subtitle</code>), <code>destination.type</code> (<code>channel</code>, <code>group</code> или <code>topic</code>).</p>
+          <p><code>data.episodeLabel</code> содержит готовую строку сезона и серии, а <code>data.creditLines</code> — массив строк об озвучке и субтитрах.</p>
+          <p><code>data.hashtags.title</code> и <code>data.hashtags.voiceover</code> содержат хештеги названия и студии озвучки. Если исходного значения нет, поле равно <code>null</code>.</p>
+        </details>
+        <label for="caption-preview-data">Данные для проверки подписи (JSON)</label>
+        <textarea id="caption-preview-data" class="code" rows="6" spellcheck="false"></textarea>
+        <div class="row">
+          <button type="button" id="caption-preview">Проверить</button>
+          <button type="button" id="caption-reset">Сбросить шаблон</button>
+          <button>Сохранить настройки</button>
+          <span id="publication-settings-status" role="status"></span>
+        </div>
+        <pre id="caption-preview-result" aria-live="polite" hidden></pre>
+      </form>
+    </section>
+    <section id="review" class="panel" hidden>
+      <h2>На проверку</h2>
+      <ul id="review-list" class="entries"></ul>
+      <button type="button" id="more-review" hidden>Ещё сообщения</button>
+    </section>
+  </main>
+</body>
+</html>

@@ -1,0 +1,17 @@
+{
+  "name": "telegram-anime-catalog",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "dependencies": {
+    "big-integer": "1.6.52",
+    "codemirror": "5.65.21",
+    "qrcode": "1.5.4",
+    "telegram": "2.26.22"
+  }
+}

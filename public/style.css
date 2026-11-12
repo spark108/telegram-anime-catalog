@@ -1,0 +1,179 @@
+:root {
+  color-scheme: light;
+  font-family: "Instrument Sans", "Segoe UI", sans-serif;
+  color: #25233d;
+  background: #f5f4fa;
+  --line: #dedbed;
+  --accent: #5543a0;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; }
+.app-header { display: flex; align-items: center; gap: .5rem; background: #262040; color: white; padding: .45rem max(1.25rem, calc((100vw - 67rem) / 2)) 0; }
+body:has(#catalog:not([hidden])) .app-header { padding-inline: max(1.25rem, calc((100vw - 89.5rem) / 2)); }
+h2 { margin: 0 0 1rem; font-size: 1.3rem; }
+nav, .row { display: flex; flex-wrap: wrap; gap: .65rem; align-items: center; }
+.app-tabs { min-width: 0; flex-wrap: nowrap; gap: .2rem; overflow-x: auto; }
+#logout { flex-shrink: 0; margin-inline-start: auto; background: transparent; border-color: #756b8e; margin-bottom: .35rem; }
+#logout:hover { background: #3b3158; }
+.app-tabs button { flex-shrink: 0; background: transparent; border: 0; border-bottom: 3px solid transparent; border-radius: .5rem .5rem 0 0; padding: .68rem .85rem .55rem; }
+.app-tabs button:hover { border-bottom-color: #74669f; }
+.app-tabs button[aria-current] { background: #f1ebff; color: #262040; border-bottom-color: #a68bd5; }
+.app-tabs button:focus-visible { outline: 2px solid #c4b1eb; outline-offset: -3px; }
+main { max-width: 69.5rem; padding: 1.25rem; margin: auto; }
+main:has(#catalog:not([hidden])) { max-width: 92rem; }
+main:has(#login-scene:not([hidden])) { max-width: 34rem; padding-top: clamp(2rem, 10vh, 6rem); }
+#login .fields { grid-template-columns: minmax(0, 1fr); }
+.source-card { margin-bottom: .6rem; border: 1px solid var(--line); border-radius: .55rem; }
+.source-card > summary { padding: .7rem .85rem; cursor: pointer; }
+.source-card > summary .muted { margin-inline-start: .45rem; }
+.source-card-body { padding: .75rem .85rem; border-top: 1px solid var(--line); }
+.source-tabs, .source-library, #local-access { margin-bottom: .75rem; }
+.source-tabs button[aria-pressed=false] { color: var(--accent); background: white; }
+.source-dialogs { max-height: 18rem; overflow-y: auto; }
+#source-dialog-search { width: min(100%, 24rem); margin-bottom: .65rem; }
+.source-dialogs label { display: flex; align-items: baseline; gap: .45rem; }
+.source-forum { margin-bottom: .65rem; }
+.source-forum summary { cursor: pointer; font-weight: 600; overflow-wrap: anywhere; }
+.source-forum-topics { margin: .4rem 0 0 .45rem; padding: .25rem 0 .1rem .8rem; border-left: 2px solid var(--line); }
+.source-forum-topics label:last-child { margin-bottom: 0; }
+#local-access { margin-top: 1rem; }
+.panel { padding: 1.25rem; border: 1px solid var(--line); border-radius: 1rem; background: white; margin-bottom: 1rem; }
+.fields { display: grid; gap: .75rem; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); }
+label { display: grid; gap: .35rem; margin-bottom: .65rem; }
+button, input, select, textarea { font: inherit; border: 1px solid var(--line); border-radius: .5rem; padding: .55rem .75rem; }
+button { background: var(--accent); color: white; cursor: pointer; }
+button:disabled { opacity: .55; cursor: default; }
+a { color: var(--accent); }
+textarea { width: 100%; resize: vertical; }
+select { max-width: 100%; min-width: min(12rem, 100%); }
+.code, pre { font: .9rem/1.5 "IBM Plex Mono", Consolas, monospace; }
+.js-editor.CodeMirror { font: .9rem/1.5 "IBM Plex Mono", Consolas, monospace; border: 1px solid var(--line); border-radius: .5rem; margin-bottom: .75rem; height: 25rem; }
+.js-editor.is-caption { height: 14rem; }
+.js-editor.CodeMirror-focused { border-color: var(--accent); }
+.js-editor .CodeMirror-gutters { background: #f5f4fa; border-color: var(--line); }
+.js-editor .CodeMirror-linenumber { color: #6f6585; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f5f4fa; padding: .65rem; border-radius: .5rem; }
+.entries { list-style: none; padding: 0; margin: .75rem 0; }
+.entries li { border-top: 1px solid var(--line); padding: .7rem 0; overflow-wrap: anywhere; }
+.entries p { margin: .45rem 0; }
+.entries button { margin-right: .5rem; }
+#notice { background: #fff0f0; border: 1px solid #edc1c1; border-radius: .5rem; padding: .75rem; }
+.catalog-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1.5rem; }
+.catalog-heading h2, .anime-title { margin: 0; font-size: clamp(1.7rem, 4vw, 2.6rem); line-height: 1.08; letter-spacing: -.035em; }
+.catalog-heading input { width: clamp(10rem, 26vw, 19rem); }
+.catalog-layout { display: grid; grid-template: "results sidebar" auto / minmax(0, 1fr) minmax(12rem, 17rem); gap: 1.25rem; align-items: start; }
+.catalog-results { grid-area: results; min-width: 0; padding: .7rem; border: 1px solid var(--line); border-radius: 1rem; background: #faf9fd; }
+.catalog-sidebar { grid-area: sidebar; position: sticky; top: 1rem; max-height: calc(100dvh - 2rem); overflow-y: auto; overscroll-behavior-y: contain; scrollbar-gutter: stable; padding: 1rem; }
+.catalog-sidebar h3 { margin: 0 0 .85rem; }
+.catalog-sidebar fieldset { min-width: 0; margin: .85rem 0 0; padding: .5rem .65rem; border: 1px solid var(--line); border-radius: .5rem; }
+.catalog-sidebar legend { padding: 0 .25rem; font-weight: 600; }
+.catalog-sidebar label { grid-template-columns: auto minmax(0, 1fr); align-items: baseline; margin: 0; padding: .25rem 0; overflow-wrap: anywhere; cursor: pointer; }
+.catalog-sidebar input { margin: 0; accent-color: var(--accent); }
+.catalog-sidebar .catalog-subfilter { margin-inline-start: 1rem; }
+.catalog-subfilter:has(input:disabled) { color: #625a74; cursor: default; }
+.catalog-filter-options { max-height: 8rem; overflow-y: auto; scrollbar-gutter: stable; }
+.poster-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .9rem; padding: 0; margin: 0; list-style: none; }
+#more-catalog { margin: .8rem .35rem .35rem; }
+.catalog-empty { grid-column: 1 / -1; color: #615b74; }
+.poster-card { display: block; height: 100%; padding: .35rem; color: inherit; text-decoration: none; border-radius: .8rem; }
+a.poster-card:hover { background: #f0ebfa; }
+a.poster-card:focus-visible { outline: 2px solid var(--accent); }
+.poster-card.is-tracked { background: #e9e0fa; box-shadow: inset 0 0 0 1px #d8cbf0; }
+a.poster-card.is-tracked:hover { background: #e2d7f6; }
+.poster-card.is-blacklisted { background: #ede9ed; box-shadow: inset 0 0 0 1px #c7becb; }
+a.poster-card.is-blacklisted:hover { background: #e5dee7; }
+.poster-grid > li { position: relative; min-width: 0; }
+.membership-menu { position: relative; width: max-content; }
+.membership-menu > summary { padding: .35rem .55rem; border-radius: .35rem; color: var(--accent); list-style: none; cursor: pointer; }
+.membership-menu > summary::-webkit-details-marker { display: none; }
+.membership-menu > summary:focus-visible { outline: 2px solid var(--accent); }
+.membership-menu[open] { z-index: 2; }
+.membership-menu-options { position: absolute; top: 100%; left: 0; display: grid; min-width: max-content; padding: .25rem; border: 1px solid var(--line); border-radius: .5rem; background: white; box-shadow: 0 .25rem .85rem #28203c22; }
+.membership-menu-options button { padding: .35rem .55rem; border: 0; border-radius: .3rem; background: transparent; color: inherit; text-align: left; }
+.membership-menu-options button:hover:not(:disabled), .membership-menu-options button:focus-visible { background: #f0ebfa; }
+.poster-membership-menu { position: absolute; top: .4rem; right: .45rem; }
+.poster-membership-menu > summary { min-width: 2rem; padding: .1rem .35rem; color: white; font-size: 1.35rem; text-align: center; text-shadow: 0 1px 3px #151021, 0 0 4px #151021; }
+.poster-membership-menu .membership-menu-options { left: auto; right: 0; }
+.poster-visual { position: relative; overflow: hidden; isolation: isolate; border-radius: .6rem; }
+.poster-frame { position: relative; display: grid; place-items: center; aspect-ratio: 2 / 3; overflow: hidden; background: linear-gradient(150deg, #e8e1f9, #c9badf); }
+.poster-frame::before { content: ''; width: 24%; aspect-ratio: 2 / 3; border: 2px solid #8876ab; border-radius: .35rem; box-shadow: .33rem .33rem 0 #b6a5d0; }
+.poster-frame img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: cover; }
+.poster-rating { position: absolute; right: .3rem; bottom: .3rem; padding: .13rem .42rem; border-radius: 1rem; background: #f8f5ff; color: #382a58; font-size: .8rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+.poster-card:is(.is-tracked, .is-blacklisted) .poster-rating { right: 2rem; }
+.poster-status { position: absolute; right: 0; bottom: 0; display: grid; place-items: end; width: 2.6rem; height: 2.6rem; padding: 0 .25rem .12rem 0; clip-path: polygon(100% 0, 100% 100%, 0 100%); background: #f6efff; color: var(--accent); font-size: 1.45rem; font-weight: 650; line-height: 1; }
+.is-blacklisted .poster-status { background: #f3eff4; color: #54485b; }
+.poster-copy { display: grid; grid-template-columns: minmax(0, 1fr); gap: .2rem; padding: .45rem 0 .2rem; }
+.poster-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 650; line-height: 1.3; }
+.poster-meta, .muted { color: #625a74; }
+.poster-meta { display: flex; justify-content: space-between; gap: .4rem; font-size: .85rem; }
+.poster-meta > :first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.back-link { display: inline-block; margin: .2rem 0 1rem; }
+.anime-hero { display: grid; grid-template-columns: minmax(8.5rem, 13.5rem) minmax(0, 1fr); align-items: start; gap: clamp(1rem, 4vw, 2rem); padding: clamp(1rem, 3vw, 1.8rem); }
+.anime-poster-card { position: relative; height: auto; }
+.anime-hero p { margin: .75rem 0; overflow-wrap: anywhere; }
+.anime-facts { display: flex; flex-wrap: wrap; gap: .4rem; list-style: none; padding: 0; margin: 1rem 0; }
+.anime-facts li { padding: .3rem .55rem; background: #f1edf8; border-radius: .35rem; font-size: .9rem; }
+.anime-description { white-space: pre-line; line-height: 1.55; max-width: 70ch; }
+.episode-section { margin: 1.6rem 0; }
+.episode-section-heading { display: flex; align-items: center; justify-content: space-between; gap: .75rem; margin-bottom: 1rem; }
+.episode-section-heading h2 { margin: 0; }
+.episode-section-actions { flex-wrap: nowrap; justify-content: flex-end; min-width: 0; }
+.episode-section-actions select { min-width: 0; }
+.episode-section-actions button, .season-heading button { white-space: nowrap; }
+#anime-merge summary { cursor: pointer; font-weight: 650; }
+#anime-merge-confirm { margin-top: .65rem; }
+.season-list { margin-bottom: 1.25rem; }
+.season-heading { display: flex; align-items: center; justify-content: space-between; gap: .65rem; margin: 1rem 0 .6rem; }
+.season-heading h3 { color: #625a74; margin: 0; font-size: .95rem; }
+.episode { background: white; border: 1px solid var(--line); border-radius: .6rem; margin-bottom: .45rem; }
+.episode summary { cursor: pointer; padding: .8rem 1rem; }
+.episode summary:hover { color: var(--accent); }
+.episode-counts { margin-left: .65rem; color: #625a74; font-size: .87rem; }
+.tracking-status { color: #5543a0; font-size: .9rem; font-weight: 600; }
+.tracking-list li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .6rem; }
+.tracking-tabs button[aria-current] { background: var(--accent); color: white; }
+.tracking-tabs button:not([aria-current]) { background: transparent; color: var(--accent); }
+.tracking-badge { display: inline-block; margin-left: .6rem; padding: .15rem .5rem; border-radius: .35rem; background: #efe6ff; color: #51318a; font-size: .83rem; font-weight: 600; }
+.episode.is-unread { border-color: #bda8df; }
+.episode-body { padding: 0 1rem .8rem; }
+.episode-body h4 { margin: .7rem 0 .4rem; }
+.episode-body .entries { margin: 0; }
+.episode-body .entries li { font-size: .94rem; }
+.publication-channels { border: 1px solid var(--line); border-radius: .55rem; margin: 0 0 1rem; padding: .8rem 1rem; }
+.publication-channels legend { padding: 0 .3rem; }
+.publication-tabs { display: flex; gap: .4rem; margin: .85rem 0 .6rem; border-bottom: 1px solid var(--line); }
+.publication-tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: .4rem .4rem 0 0; background: transparent; color: #51466c; }
+.publication-tabs [aria-selected=true] { border-bottom-color: var(--accent); background: #f1edf8; color: #35275f; }
+.publication-channel { display: flex; gap: .5rem; align-items: center; margin: .4rem 0; }
+.publication-channel input { margin: 0; }
+.publication-forum { margin: .5rem 0; padding: .45rem .65rem; border: 1px solid var(--line); border-radius: .45rem; }
+.publication-forum summary { cursor: pointer; }
+.publication-topics { padding: .35rem 0 0 .85rem; }
+.template-fields { margin: .5rem 0 1rem; }
+.template-fields summary { cursor: pointer; }
+#publication-settings-status { margin-left: .55rem; }
+.publish-controls { margin: .5rem 0; }
+.publish-menu { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; margin: .45rem 0; }
+.publish-menu button { background: #f1edf8; color: #35275f; margin-right: 0; }
+.publish-menu .publish-all { background: var(--accent); color: white; }
+.publication-states { list-style: none; margin: .45rem 0; padding: 0; color: #625a74; }
+.entries .publication-states li { border: 0; padding: .15rem 0; font-size: .85rem; }
+.publication-states .publication-failed { color: #963b43; }
+@media (min-width: 75rem) {
+  .poster-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}
+@media (max-width: 54rem) {
+  .catalog-layout { grid-template-columns: minmax(0, 1fr) minmax(11rem, 14rem); }
+  .poster-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 43rem) {
+  .catalog-layout { grid-template: "sidebar" auto "results" auto / minmax(0, 1fr); }
+  .catalog-sidebar { position: static; max-height: 50dvh; margin-bottom: 0; }
+}
+@media (max-width: 34rem) {
+  .poster-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
+  .anime-hero { grid-template-columns: minmax(0, 1fr); }
+  .anime-poster-card { width: min(58%, 12rem); }
+  .episode-counts { display: block; margin: .2rem 0 0; }
+}

@@ -15,7 +15,9 @@ body { margin: 0; }
 h2 { margin: 0 0 1rem; font-size: 1.3rem; }
 nav, .row { display: flex; flex-wrap: wrap; gap: .65rem; align-items: center; }
 .app-tabs { min-width: 0; flex-wrap: nowrap; gap: .2rem; overflow-x: auto; }
-#logout { flex-shrink: 0; margin-inline-start: auto; background: transparent; border-color: #756b8e; margin-bottom: .35rem; }
+.app-header-actions { display: flex; align-items: center; flex-shrink: 0; gap: .65rem; margin-inline-start: auto; margin-bottom: .35rem; }
+#update-link { color: #f1e9ff; font-size: .85rem; text-align: center; max-width: 10rem; }
+#logout { flex-shrink: 0; background: transparent; border-color: #756b8e; }
 #logout:hover { background: #3b3158; }
 .app-tabs button { flex-shrink: 0; background: transparent; border: 0; border-bottom: 3px solid transparent; border-radius: .5rem .5rem 0 0; padding: .68rem .85rem .55rem; }
 .app-tabs button:hover { border-bottom-color: #74669f; }

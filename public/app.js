@@ -1839,8 +1839,27 @@ function showView(next) {
   }
 }
 
+let updateRequest;
+function loadUpdateStatus() {
+  updateRequest ??= api('update-status').then(({ status, current, latest }) => {
+    el('update-link').hidden = status !== 'available';
+    const messages = {
+      available: 'Доступна новая версия ' + (latest?.slice(0, 7) ?? '') + '.',
+      current: 'Обновлений нет.',
+      unknown: 'Не удалось определить версию установленной копии.',
+      unavailable: 'Не удалось проверить обновления на GitHub.'
+    };
+    el('update-status').textContent = [messages[status], current ? 'Текущая версия ' + current.slice(0, 7) + '.' : '']
+      .filter(Boolean).join(' ');
+  }).catch(() => {
+    el('update-status').textContent = 'Не удалось проверить обновления.';
+  }).finally(() => { updateRequest = undefined; });
+  return updateRequest;
+}
+
 async function loadRoute() {
   await loadViewSettings();
+  void loadUpdateStatus();
   showCatalogFilters();
   const query = new URLSearchParams(location.search);
   if (detailId) {
@@ -1865,10 +1884,20 @@ async function loadRoute() {
   } else if (query.get('view') === 'analysis-log') {
     showView('analysis-log');
     await loadAnalysisLog();
+  } else if (query.get('view') === 'updates') {
+    showView('updates');
   } else {
     location.replace('/');
   }
 }
+
+el('update-link').onclick = event => {
+  if (detailId || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+  event.preventDefault();
+  showView('updates');
+  history.replaceState(null, '', event.currentTarget.href);
+  void loadUpdateStatus();
+};
 
 for (const tab of document.querySelectorAll('[data-view]')) {
   tab.onclick = action(async () => {
@@ -1920,6 +1949,9 @@ async function loadAnalysisLog() {
 }
 
 refresh().catch(error => notice(error.message));
+setInterval(() => {
+  if (view !== 'login-scene') void loadUpdateStatus();
+}, 60_000);
 setInterval(() => {
   if (view === 'analysis-log') loadAnalysisLog().catch(() => {});
 }, 1000);

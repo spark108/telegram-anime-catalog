@@ -20,7 +20,10 @@
       <button type="button" data-view="sources">Источники</button>
       <button type="button" data-view="analysis-log">Лог</button>
     </nav>
-    <button type="button" id="logout">Выйти</button>
+    <div class="app-header-actions">
+      <a id="update-link" href="/?view=updates" hidden>Доступно обновление</a>
+      <button type="button" id="logout">Выйти</button>
+    </div>
   </header>
   <main>
     <p id="notice" role="alert" hidden></p>
@@ -286,6 +289,25 @@
     <section id="analysis-log" hidden>
       <h2>Лог анализа</h2>
       <pre id="analysis-console" tabindex="0" aria-label="Журнал обработки сообщений">Ожидаем сообщения…</pre>
+    </section>
+    <section id="updates" class="panel" hidden>
+      <h2>Обновление каталога</h2>
+      <p id="update-status" role="status">Проверяем обновления…</p>
+      <p><a href="https://github.com/spark108/telegram-anime-catalog" target="_blank" rel="noreferrer">Проект на GitHub</a> ·
+        <a href="https://github.com/spark108/telegram-anime-catalog/archive/refs/heads/main.zip">Скачать ZIP</a></p>
+      <h3>Через Git</h3>
+      <ol>
+        <li>Остановите сервер и откройте терминал в папке проекта.</li>
+        <li>Выполните <code>git pull --ff-only origin main</code>.</li>
+        <li>Снова запустите каталог привычным скриптом. Он проверит зависимости.</li>
+      </ol>
+      <h3>Вручную из ZIP</h3>
+      <ol>
+        <li>Остановите сервер и распакуйте свежий архив в новую папку.</li>
+        <li>Скопируйте в неё <code>.env</code> и папку <code>data</code> из старой установки. Если задана переменная
+          <code>ANIME_CATALOG_DATA</code>, оставьте её указывать на существующую папку данных.</li>
+        <li>Запустите каталог из новой папки. Скрипт установит необходимые пакеты.</li>
+      </ol>
     </section>
   </main>
 </body>

@@ -9,6 +9,7 @@ const { captionExample, previewCaption } = require('./caption');
 const { createTelegram } = require('./telegram-client');
 const { createShikimori } = require('./shikimori');
 const { createPublisher, validKey } = require('./publications');
+const { createUpdateCheck } = require('./updates');
 
 const host = '::';
 const port = Number(process.env.ANIME_CATALOG_PORT || 8187);
@@ -23,6 +24,7 @@ const shikimori = createShikimori(catalog);
 const publisher = createPublisher(catalog, telegram);
 const playbackSecret = crypto.randomBytes(32);
 const logSession = crypto.randomUUID();
+const checkUpdates = createUpdateCheck(__dirname);
 const isLoopback = req => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress) &&
   [`127.0.0.1:${port}`, `[::1]:${port}`, `localhost:${port}`].includes(req.headers.host);
 const files = {
@@ -153,6 +155,8 @@ async function api(req, url) {
   const before = Number(query.get('before') ?? Number.MAX_SAFE_INTEGER);
   const beforeSource = query.get('beforeSource') || '~';
   switch (route) {
+    case 'GET /api/update-status':
+      return checkUpdates();
     case 'GET /api/analysis-log': {
       const after = Number(query.get('after'));
       const cursor = query.get('session') === logSession && Number.isSafeInteger(after) && after >= 0 ? after : 0;

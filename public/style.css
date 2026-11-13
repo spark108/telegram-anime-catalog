@@ -5,12 +5,13 @@
   background: #f5f4fa;
   --line: #dedbed;
   --accent: #5543a0;
+  --content-width: 92rem;
+  --page-gutter: 1.25rem;
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 body { margin: 0; }
-.app-header { display: flex; align-items: center; gap: .5rem; background: #262040; color: white; padding: .45rem max(1.25rem, calc((100vw - 67rem) / 2)) 0; }
-body:has(#catalog:not([hidden])) .app-header { padding-inline: max(1.25rem, calc((100vw - 89.5rem) / 2)); }
+.app-header { display: flex; align-items: center; gap: .5rem; background: #262040; color: white; padding: .45rem max(var(--page-gutter), calc((100% - var(--content-width)) / 2 + var(--page-gutter))) 0; }
 h2 { margin: 0 0 1rem; font-size: 1.3rem; }
 nav, .row { display: flex; flex-wrap: wrap; gap: .65rem; align-items: center; }
 .app-tabs { min-width: 0; flex-wrap: nowrap; gap: .2rem; overflow-x: auto; }
@@ -20,8 +21,7 @@ nav, .row { display: flex; flex-wrap: wrap; gap: .65rem; align-items: center; }
 .app-tabs button:hover { border-bottom-color: #74669f; }
 .app-tabs button[aria-current] { background: #f1ebff; color: #262040; border-bottom-color: #a68bd5; }
 .app-tabs button:focus-visible { outline: 2px solid #c4b1eb; outline-offset: -3px; }
-main { max-width: 69.5rem; padding: 1.25rem; margin: auto; }
-main:has(#catalog:not([hidden])) { max-width: 92rem; }
+main { max-width: var(--content-width); padding: var(--page-gutter); margin: auto; }
 main:has(#login-scene:not([hidden])) { max-width: 34rem; padding-top: clamp(2rem, 10vh, 6rem); }
 #login .fields { grid-template-columns: minmax(0, 1fr); }
 .source-card { margin-bottom: .6rem; border: 1px solid var(--line); border-radius: .55rem; }
@@ -54,13 +54,22 @@ select { max-width: 100%; min-width: min(12rem, 100%); }
 .js-editor .CodeMirror-gutters { background: #f5f4fa; border-color: var(--line); }
 .js-editor .CodeMirror-linenumber { color: #6f6585; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f5f4fa; padding: .65rem; border-radius: .5rem; }
+#analysis-console { height: min(70vh, 42rem); margin: 0; overflow: auto; padding: 1rem; background: #080b09; color: #73ef92; }
 .entries { list-style: none; padding: 0; margin: .75rem 0; }
 .entries li { border-top: 1px solid var(--line); padding: .7rem 0; overflow-wrap: anywhere; }
 .entries p { margin: .45rem 0; }
 .entries button { margin-right: .5rem; }
+.review-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: end; gap: .75rem; }
+.review-heading h2, .review-filters label { margin: 0; }
+#review-source { max-width: min(24rem, 80vw); }
+#review-page-size { min-width: 0; }
+#review-pagination { margin-top: 1rem; }
+#review-pagination button { color: var(--accent); background: white; }
+#review-pagination [aria-current=page] { color: white; background: var(--accent); }
 #notice { background: #fff0f0; border: 1px solid #edc1c1; border-radius: .5rem; padding: .75rem; }
 .catalog-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1.5rem; }
 .catalog-heading h2, .anime-title { margin: 0; font-size: clamp(1.7rem, 4vw, 2.6rem); line-height: 1.08; letter-spacing: -.035em; }
+.catalog-count { display: inline-block; margin-inline-start: .4em; padding: .2em .55em; border-radius: 1em; background: #efe6ff; color: #51318a; font-size: .65em; letter-spacing: 0; vertical-align: middle; }
 .catalog-heading input { width: clamp(10rem, 26vw, 19rem); }
 .catalog-layout { display: grid; grid-template: "results sidebar" auto / minmax(0, 1fr) minmax(12rem, 17rem); gap: 1.25rem; align-items: start; }
 .catalog-results { grid-area: results; min-width: 0; padding: .7rem; border: 1px solid var(--line); border-radius: 1rem; background: #faf9fd; }
@@ -120,13 +129,25 @@ a.poster-card.is-blacklisted:hover { background: #e5dee7; }
 .episode-section-heading h2 { margin: 0; }
 .episode-section-actions { flex-wrap: nowrap; justify-content: flex-end; min-width: 0; }
 .episode-section-actions select { min-width: 0; }
+#episode-source { max-width: min(18rem, 40vw); }
+@media (max-width: 42rem) {
+  .episode-section-heading, .episode-section-actions { flex-wrap: wrap; }
+  .episode-section-actions { justify-content: flex-start; }
+  #episode-source { max-width: 100%; }
+}
 .episode-section-actions button, .season-heading button { white-space: nowrap; }
 #anime-merge summary { cursor: pointer; font-weight: 650; }
 #anime-merge-confirm { margin-top: .65rem; }
 .season-list { margin-bottom: 1.25rem; }
+.season-episodes, .episode-column { display: grid; gap: .45rem .75rem; align-items: start; }
+.season-episodes.has-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .season-heading { display: flex; align-items: center; justify-content: space-between; gap: .65rem; margin: 1rem 0 .6rem; }
 .season-heading h3 { color: #625a74; margin: 0; font-size: .95rem; }
-.episode { background: white; border: 1px solid var(--line); border-radius: .6rem; margin-bottom: .45rem; }
+.season-heading .season-toggle { padding: .45rem .15rem; border: 0; background: transparent; color: inherit; font-weight: inherit; }
+.season-toggle::before { content: '▸'; display: inline-block; width: 1rem; }
+.season-toggle[aria-expanded=true]::before { content: '▾'; }
+.season-heading .season-toggle:hover { color: var(--accent); }
+.episode { min-width: 0; background: white; border: 1px solid var(--line); border-radius: .6rem; }
 .episode summary { cursor: pointer; padding: .8rem 1rem; }
 .episode summary:hover { color: var(--accent); }
 .episode-counts { margin-left: .65rem; color: #625a74; font-size: .87rem; }
@@ -140,6 +161,29 @@ a.poster-card.is-blacklisted:hover { background: #e5dee7; }
 .episode-body h4 { margin: .7rem 0 .4rem; }
 .episode-body .entries { margin: 0; }
 .episode-body .entries li { font-size: .94rem; }
+.episode-body .entries > .release-card { margin: .55rem 0; padding: .85rem 1rem; border: 1px solid var(--line); border-radius: .75rem; background: #faf9fd; }
+.release-header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .35rem .8rem; }
+.release-message, .release-telegram-link { color: #625a74; font-size: .85rem; }
+.release-tags { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .4rem; }
+.release-tags span { padding: .18rem .45rem; border-radius: .4rem; background: #f0eafb; color: #513d77; font-size: .83rem; }
+.release-file { margin-top: .65rem; padding: .65rem .75rem; border: 1px solid var(--line); border-radius: .55rem; background: white; }
+.release-actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: .5rem; margin-top: .65rem; }
+.release-actions .publish-controls { margin: 0; }
+.release-actions .publish-controls > button { color: var(--accent); background: white; }
+.release-telegram-link { display: inline-block; margin-top: .65rem; }
+.anime-playback { display: grid; grid-template-columns: minmax(0, 1fr) minmax(12rem, 16rem); gap: 1rem; align-items: start; margin-top: 1rem; }
+.anime-playback-screen { position: relative; aspect-ratio: 16 / 9; min-width: 0; overflow: hidden; border-radius: .65rem; background: #201b2b; color: white; }
+.anime-playback-screen video, .anime-video-cover { position: absolute; inset: 0; width: 100%; height: 100%; }
+.anime-playback-screen video { object-fit: contain; }
+.anime-video-cover { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .5rem; padding: 1rem; text-align: center; }
+.anime-video-cover p { margin: 0; }
+.anime-playback-choices { display: grid; gap: .65rem; }
+.anime-playback-choices label { margin: 0; min-width: 0; font-size: .9rem; }
+.anime-playback-choices select { width: 100%; min-width: 0; background: white; }
+@media (max-width: 42rem) {
+  .anime-playback { grid-template-columns: minmax(0, 1fr); }
+  .anime-playback-choices { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 .publication-channels { border: 1px solid var(--line); border-radius: .55rem; margin: 0 0 1rem; padding: .8rem 1rem; }
 .publication-channels legend { padding: 0 .3rem; }
 .publication-tabs { display: flex; gap: .4rem; margin: .85rem 0 .6rem; border-bottom: 1px solid var(--line); }

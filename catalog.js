@@ -4,7 +4,7 @@ const { openPublicationStore } = require('./publications');
 const { openTracking, dubbedVideo, subtitledVideo, readJoin, isUnread } = require('./tracking');
 
 const catalogReleases = `WITH releases AS NOT MATERIALIZED (
-  SELECT anime_id, attachments, json_extract(result, '$.voiceover') AS voiceover,
+  SELECT anime_id, source_id, attachments, json_extract(result, '$.voiceover') AS voiceover,
     json_extract(result, '$.audioVariant') AS audio_variant,
     json_extract(result, '$.subtitles') AS subtitles,
     json_extract(result, '$.subtitles.author') AS subtitle_author
@@ -59,15 +59,23 @@ function openCatalog(file) {
     db.exec('ALTER TABLE sources ADD COLUMN attached INTEGER NOT NULL DEFAULT 1');
   }
 
+  const analysisLog = [];
+  let logSequence = 0;
+  let pendingLog;
   const transaction = action => {
     db.exec('BEGIN IMMEDIATE');
+    pendingLog = [];
     try {
       const result = action();
       db.exec('COMMIT');
+      for (const entry of pendingLog) analysisLog.push({ id: ++logSequence, ...entry });
+      if (analysisLog.length > 1000) analysisLog.splice(0, analysisLog.length - 1000);
       return result;
     } catch (error) {
       db.exec('ROLLBACK');
       throw error;
+    } finally {
+      pendingLog = undefined;
     }
   };
   const settings = db.prepare('SELECT value FROM settings WHERE key = ?');
@@ -91,6 +99,26 @@ function openCatalog(file) {
   const aliasesFor = db.prepare('SELECT DISTINCT title FROM anime_aliases WHERE anime_id = ? AND title <> ? ORDER BY title');
   const setAnalysis = db.prepare(`
     UPDATE messages SET result = ?, issue = ?, anime_id = ? WHERE source_id = ? AND id = ?
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS messages_series_key ON messages(source_id, json_extract(result, '$.seriesKey'))
+    WHERE json_extract(result, '$.seriesKey') IS NOT NULL
+  `);
+  const seriesTitles = db.prepare(`
+    SELECT DISTINCT anime_id FROM messages
+    WHERE source_id = ? AND json_extract(result, '$.seriesKey') = ?
+      AND json_extract(result, '$.title') IS NOT NULL AND anime_id IS NOT NULL
+    LIMIT 2
+  `);
+  const linkShortCaptions = db.prepare(`
+    UPDATE messages SET anime_id = $animeId, issue = $issue
+    WHERE source_id = $sourceId AND json_extract(result, '$.seriesKey') = $seriesKey
+      AND json_extract(result, '$.title') IS NULL AND manual_anime_id IS NULL
+      AND (anime_id IS NOT $animeId OR issue IS NOT $issue)
+  `);
+  const previousSeries = db.prepare(`
+    SELECT json_extract(result, '$.seriesKey') AS seriesKey FROM messages
+    WHERE source_id = ? AND id = ? AND json_extract(result, '$.title') IS NOT NULL
   `);
   const upsertMessage = db.prepare(`
     INSERT INTO messages(source_id, id, date, text, attachments) VALUES (?, ?, ?, ?, ?)
@@ -120,22 +148,55 @@ function openCatalog(file) {
     return insertAnime.run(result.title, titleKey, result.year).lastInsertRowid;
   }
 
-  function applyAnalysis(script, message, manualId) {
+  function seriesMatch(sourceId, seriesKey) {
+    const matches = seriesTitles.all(sourceId, seriesKey);
+    if (matches.length === 1) return { animeId: matches[0].anime_id, issue: null };
+    return { animeId: null, issue: matches.length
+      ? 'Этот хештег встречается у нескольких тайтлов.' : 'Для хештега ещё нет полной подписи.' };
+  }
+
+  function applyAnalysis(script, sourceTitle, message, manualId) {
     let result = null;
     let issue = null;
     let animeId = manualId;
     try {
       if (script) result = analyze(script, message);
-      if (animeId === null && result?.title) {
+      if (result?.skip) {
+        animeId = null;
+      } else if (animeId === null && result?.title) {
         animeId = matchAnime(result);
         if (animeId === null) issue = 'Найдено несколько тайтлов с этим названием.';
+      } else if (animeId === null && result?.seriesKey && message.attachments.length) {
+        ({ animeId, issue } = seriesMatch(message.source_id, result.seriesKey));
       } else if (animeId === null && message.attachments.length) {
         issue = script ? 'Не определено название.' : 'Анализатор не настроен.';
       }
     } catch (error) {
       issue = error.message.slice(0, 500);
     }
-    setAnalysis.run(result && JSON.stringify(result), issue, animeId, message.source_id, message.id);
+    const sourceId = message.source_id;
+    const previous = previousSeries.get(sourceId, message.id)?.seriesKey;
+    setAnalysis.run(result && JSON.stringify(result), issue, animeId, sourceId, message.id);
+    for (const seriesKey of new Set([previous, result?.title && result.seriesKey].filter(Boolean))) {
+      linkShortCaptions.run({ sourceId, seriesKey, ...seriesMatch(sourceId, seriesKey) });
+    }
+    if (script) {
+      const title = animeId === null ? null : getAnime.get(animeId)?.title;
+      const fields = [
+        'Аниме: ' + (title ?? result?.title ?? 'не указано'),
+        result?.season == null ? null : 'Сезон: ' + result.season,
+        result?.episode == null ? null : 'Серия: ' + result.episode,
+        result?.voiceover || result?.audioVariant ? 'Озвучка: ' + (result.voiceover ?? result.audioVariant) : null,
+        result?.subtitles || !(result?.voiceover || result?.audioVariant)
+          ? 'Субтитры: ' + (result?.subtitles?.author ?? 'не указано') : null
+      ];
+      const summary = result?.skip ? 'Пропущено' : issue ? 'Отправлено на проверку · ' + issue
+        : animeId === null ? 'Тайтл не определён' : fields.filter(Boolean).join(' · ');
+      pendingLog.push({
+        processedAt: Date.now(),
+        line: `${sourceTitle} #${message.id}, ${summary}`.replace(/[\r\n]+/g, ' ')
+      });
+    }
   }
 
   const publications = openPublicationStore(db, transaction);
@@ -214,16 +275,15 @@ function openCatalog(file) {
     detachSource: id => db.prepare('UPDATE sources SET attached = 0 WHERE id = ?').run(id),
     addSource,
     addSources: sources => transaction(() => sources.forEach(addSource)),
+    analysisLog: after => analysisLog.filter(entry => entry.id > after),
     saveAnalyzer(id, code) {
       const script = compile(code);
       transaction(() => {
         db.prepare('UPDATE sources SET analyzer = ? WHERE id = ?').run(code, id);
-        db.prepare('UPDATE messages SET result = NULL, issue = NULL WHERE source_id = ?').run(id);
         const recent = db.prepare('SELECT * FROM messages WHERE source_id = ? ORDER BY id DESC LIMIT 25').all(id);
-        for (const row of recent) applyAnalysis(script, decode(row), row.manual_anime_id);
-        db.prepare(`
-          INSERT OR REPLACE INTO settings VALUES (?, '0')
-        `).run('reanalyze:' + id);
+        const { title } = db.prepare('SELECT title FROM sources WHERE id = ?').get(id);
+        for (const row of recent) applyAnalysis(script, title, decode(row), row.manual_anime_id);
+        setSettings.run('reanalyze:' + id, JSON.stringify({ before: recent.at(-1)?.id ?? 0 }));
       });
     },
     reanalyze(source) {
@@ -231,14 +291,19 @@ function openCatalog(file) {
       const position = settings.get(setting);
       if (!position) return;
       const script = compile(source.analyzer);
-      const rows = db.prepare(`
-        SELECT * FROM messages WHERE source_id = ? AND id > ?
-        AND result IS NULL AND issue IS NULL ORDER BY id LIMIT 25
-      `)
-        .all(source.id, Number(position.value));
+      const cursor = JSON.parse(position.value);
+      const legacy = typeof cursor === 'number';
+      const rows = legacy
+        ? db.prepare(`SELECT * FROM messages WHERE source_id = ? AND id > ?
+            AND result IS NULL AND issue IS NULL ORDER BY id LIMIT 25`).all(source.id, cursor)
+        : db.prepare(`SELECT * FROM messages WHERE source_id = ? AND id < ?
+            ORDER BY id DESC LIMIT 25`).all(source.id, cursor.before);
       transaction(() => {
-        for (const row of rows) applyAnalysis(script, decode(row), row.manual_anime_id);
-        if (rows.length) setSettings.run(setting, String(rows.at(-1).id));
+        for (const row of rows) applyAnalysis(script, source.title, decode(row), row.manual_anime_id);
+        if (rows.length) {
+          const id = rows.at(-1).id;
+          setSettings.run(setting, JSON.stringify(legacy ? id : { before: id }));
+        }
         else {
           db.prepare('DELETE FROM settings WHERE key = ?').run(setting);
           pruneAnime.run();
@@ -250,7 +315,7 @@ function openCatalog(file) {
       transaction(() => {
         for (const message of rows) {
           const row = upsertMessage.get(source.id, message.id, message.date, message.text, JSON.stringify(message.attachments));
-          if (row) applyAnalysis(script, { ...message, source_id: source.id }, row.manual_anime_id);
+          if (row) applyAnalysis(script, source.title, { ...message, source_id: source.id }, row.manual_anime_id);
         }
         if (progress.head !== undefined) db.prepare('UPDATE sources SET head = ? WHERE id = ?').run(progress.head, source.id);
         if (progress.cursor !== undefined) db.prepare('UPDATE sources SET cursor = ?, history_done = ? WHERE id = ?')
@@ -265,33 +330,51 @@ function openCatalog(file) {
       `).get(sourceId, messageId);
       return row && decode(row);
     },
-    review: (before, beforeSource) => db.prepare(`
-      SELECT m.*, s.title AS source_title FROM messages m JOIN sources s ON s.id = m.source_id
-      WHERE m.issue IS NOT NULL AND m.manual_anime_id IS NULL AND (m.id, m.source_id) < (?, ?)
-      ORDER BY m.id DESC, m.source_id DESC LIMIT 50
-    `).all(before, beforeSource).map(decode),
+    review(source, page, pageSize) {
+      const pending = 'm.issue IS NOT NULL AND m.manual_anime_id IS NULL';
+      const sources = db.prepare(`
+        SELECT s.id, s.title, COUNT(*) AS total
+        FROM messages m JOIN sources s ON s.id = m.source_id
+        WHERE ${pending} GROUP BY s.id
+      `).all();
+      const total = source ? sources.find(entry => entry.id === source)?.total ?? 0
+        : sources.reduce((sum, entry) => sum + entry.total, 0);
+      const pages = Math.max(1, Math.ceil(total / pageSize));
+      page = Math.min(page, pages);
+      const rows = db.prepare(`
+        SELECT m.*, s.title AS source_title, s.username FROM messages m JOIN sources s ON s.id = m.source_id
+        WHERE ${pending} AND ($source = '' OR m.source_id = $source)
+        ORDER BY m.id DESC, m.source_id DESC LIMIT $pageSize OFFSET $offset
+      `).all({ source, pageSize, offset: (page - 1) * pageSize }).map(decode);
+      return { rows, sources, page, pages, total };
+    },
     assign(sourceId, messageId, animeId, title, year) {
       transaction(() => {
         animeId = animeId === null ? insertAnime.run(title, key(title), year).lastInsertRowid : resolveAnime(animeId);
-        const updated = db.prepare('UPDATE messages SET manual_anime_id = ?, anime_id = ?, issue = NULL WHERE source_id = ? AND id = ?')
+        const updated = db.prepare(`
+          UPDATE messages SET manual_anime_id = ?, anime_id = ?, issue = NULL
+          WHERE source_id = ? AND id = ? AND json_extract(result, '$.skip') IS NOT 1
+        `)
           .run(animeId, animeId, sourceId, messageId);
         if (!updated.changes) throw new Error('Сообщение не найдено.');
         pruneAnime.run();
       });
     },
     list(query, after, {
-      onlyVoiceovers = false, onlySubtitles = false, voiceovers = [], subtitles = [], years = [],
+      onlyVoiceovers = false, onlySubtitles = false, voiceovers = [], subtitles = [], years = [], sourceIds = [],
       tracking: trackingFilter = 'all', onlyUnread = false, includeBlacklist = true
-    } = {}) {
-      return db.prepare(`${catalogReleases}
-      SELECT a.*, c.data AS metadata, c.next_check, (SELECT COUNT(*) FROM messages m WHERE m.anime_id = a.id) AS messages,
-        (t.anime_id IS NOT NULL AND t.blacklisted_at IS NULL) AS tracked,
-        t.blacklisted_at IS NOT NULL AS blacklisted
+    } = {}, includeCounts = false) {
+      const matchingTitles = `${catalogReleases},
+      selected_sources AS (SELECT value FROM json_each($sourceIds)),
+      matching_releases AS NOT MATERIALIZED (
+        SELECT * FROM releases WHERE $hasSources = 0 OR source_id IN (SELECT value FROM selected_sources)
+      )
+      SELECT a.id
       FROM anime a ${catalogMetadata} LEFT JOIN tracked_anime t ON t.anime_id = a.id
-      WHERE a.id > $after AND (instr(a.title_key, $query) > 0 OR EXISTS (
+      WHERE (instr(a.title_key, $query) > 0 OR EXISTS (
         SELECT 1 FROM anime_aliases alias WHERE alias.anime_id = a.id AND instr(alias.title_key, $query) > 0
       ))
-        AND EXISTS (SELECT 1 FROM messages m WHERE m.anime_id = a.id)
+        AND EXISTS (SELECT 1 FROM matching_releases r WHERE r.anime_id = a.id)
         AND CASE $tracking
           WHEN 'tracked' THEN t.anime_id IS NOT NULL AND t.blacklisted_at IS NULL
           WHEN 'untracked' THEN t.anime_id IS NULL
@@ -300,33 +383,51 @@ function openCatalog(file) {
         END
         AND ($onlyUnread = 0 OR EXISTS (
           SELECT 1 FROM messages m ${readJoin} WHERE m.anime_id = a.id AND ${isUnread}
+            AND ($hasSources = 0 OR m.source_id IN (SELECT value FROM selected_sources))
         ))
         AND ($hasYears = 0 OR ${catalogYear} IN (SELECT value FROM json_each($years)))
         AND ($hasVoiceovers = 0 OR EXISTS (
-          SELECT 1 FROM releases r WHERE r.anime_id = a.id AND (
+          SELECT 1 FROM matching_releases r WHERE r.anime_id = a.id AND (
             r.voiceover IN (SELECT value FROM json_each($voiceovers)) OR
             r.audio_variant IN (SELECT value FROM json_each($voiceovers))
           )
         ))
         AND ($onlyVoiceovers = 0 OR EXISTS (
-          SELECT 1 FROM releases r WHERE r.anime_id = a.id AND (r.voiceover IS NOT NULL OR r.audio_variant IS NOT NULL)
+          SELECT 1 FROM matching_releases r WHERE r.anime_id = a.id AND (r.voiceover IS NOT NULL OR r.audio_variant IS NOT NULL)
         ))
         AND ($hasSubtitles = 0 OR EXISTS (
-          SELECT 1 FROM releases r WHERE r.anime_id = a.id AND r.subtitle_author IN (SELECT value FROM json_each($subtitles))
+          SELECT 1 FROM matching_releases r WHERE r.anime_id = a.id AND r.subtitle_author IN (SELECT value FROM json_each($subtitles))
         ))
         AND ($onlySubtitles = 0 OR EXISTS (
-          SELECT 1 FROM releases r WHERE r.anime_id = a.id AND (r.subtitles IS NOT NULL OR EXISTS (
+          SELECT 1 FROM matching_releases r WHERE r.anime_id = a.id AND (r.subtitles IS NOT NULL OR EXISTS (
             SELECT 1 FROM json_each(r.attachments) f WHERE json_extract(f.value, '$.kind') = 'subtitle'
           ))
         ))
-      ORDER BY a.id LIMIT 50
-      `).all({
-        after, query: key(query), onlyVoiceovers: Number(onlyVoiceovers), onlySubtitles: Number(onlySubtitles),
+      `;
+      const params = {
+        query: key(query), onlyVoiceovers: Number(onlyVoiceovers), onlySubtitles: Number(onlySubtitles),
         tracking: trackingFilter, onlyUnread: Number(trackingFilter === 'tracked' && onlyUnread), includeBlacklist: Number(includeBlacklist),
+        hasSources: Number(sourceIds.length > 0), sourceIds: JSON.stringify(sourceIds),
         hasYears: Number(years.length > 0), years: JSON.stringify(years),
         hasVoiceovers: Number(voiceovers.length > 0), voiceovers: JSON.stringify(voiceovers),
         hasSubtitles: Number(subtitles.length > 0), subtitles: JSON.stringify(subtitles)
-      }).map(withMetadataSummary);
+      };
+      const rows = db.prepare(`
+        SELECT a.*, c.data AS metadata, c.next_check, (SELECT COUNT(*) FROM messages m WHERE m.anime_id = a.id) AS messages,
+          (t.anime_id IS NOT NULL AND t.blacklisted_at IS NULL) AS tracked,
+          t.blacklisted_at IS NOT NULL AS blacklisted
+        FROM anime a ${catalogMetadata} LEFT JOIN tracked_anime t ON t.anime_id = a.id
+        WHERE a.id > $after AND a.id IN (${matchingTitles} AND a.id > $after)
+        ORDER BY a.id LIMIT 50
+      `).all({ ...params, after }).map(withMetadataSummary);
+      if (!includeCounts) return rows;
+      const { matched, total } = db.prepare(`
+        SELECT (SELECT COUNT(*) FROM (${matchingTitles})) AS matched,
+          (SELECT COUNT(*) FROM anime a WHERE EXISTS (
+            SELECT 1 FROM messages m WHERE m.anime_id = a.id
+          )) AS total
+      `).get(params);
+      return { rows, matched, total };
     },
     filterOptions() {
       const voiceovers = db.prepare(`${catalogReleases}
@@ -340,14 +441,23 @@ function openCatalog(file) {
         SELECT DISTINCT ${catalogYear} AS year FROM anime a ${catalogMetadata}
         WHERE ${catalogYear} IS NOT NULL AND EXISTS (SELECT 1 FROM messages m WHERE m.anime_id = a.id)
       `).all();
-      return { voiceovers: voiceovers.map(row => row.name), subtitles: subtitles.map(row => row.name), years: years.map(row => row.year) };
+      const sources = db.prepare(`
+        SELECT s.id, s.title FROM sources s
+        WHERE s.attached = 1 OR EXISTS (
+          SELECT 1 FROM messages m WHERE m.source_id = s.id AND m.anime_id IS NOT NULL
+        )
+      `).all();
+      return { voiceovers: voiceovers.map(row => row.name), subtitles: subtitles.map(row => row.name), years: years.map(row => row.year), sources };
     },
     metadata: ids => db.prepare(`
       SELECT a.id, c.data AS metadata, c.next_check FROM anime a
       LEFT JOIN shikimori_cache c ON c.anime_id = a.id AND c.title = a.title AND c.year IS a.year
       WHERE a.id IN (SELECT value FROM json_each(?))
     `).all(JSON.stringify(ids)).map(withMetadataSummary),
-    animePage(id) {
+    episodeSources: id => db.prepare(`
+      SELECT DISTINCT s.id, s.title FROM messages m JOIN sources s ON s.id = m.source_id WHERE m.anime_id = ?
+    `).all(resolveAnime(id)),
+    animePage(id, requestedSource = '') {
       id = resolveAnime(id);
       const row = db.prepare(`
         SELECT a.*, c.data AS metadata, c.next_check FROM anime a
@@ -356,13 +466,35 @@ function openCatalog(file) {
       if (!row) return null;
       const { metadata, next_check, ...anime } = row;
       const shikimori = JSON.parse(metadata);
-      return { anime, aliases: aliasesFor.all(id, anime.title).map(alias => alias.title), episodes: tracking.groups(id), ...tracking.membership(id),
+      const sources = this.episodeSources(id);
+      const source = sources.some(entry => entry.id === requestedSource) ? requestedSource : '';
+      return { anime, aliases: aliasesFor.all(id, anime.title).map(alias => alias.title), sources, source,
+        episodes: tracking.groups(id, source), ...tracking.membership(id),
         shikimori, metadataChecked: next_check != null, posterPending: needsPoster(shikimori) };
     },
-    episode: (id, season, episode, before, beforeSource, material = 'all') => db.prepare(`
+    playbackOptions: id => db.prepare(`
+      WITH videos AS (
+        SELECT json_extract(m.result, '$.season') AS season, json_extract(m.result, '$.episode') AS episode,
+          json_extract(m.result, '$.voiceover') AS voiceover, json_extract(m.result, '$.audioVariant') AS audioVariant,
+          json_extract(m.result, '$.subtitles.mode') AS subtitleMode,
+          s.id AS sourceId, s.title AS sourceTitle, m.id AS messageId, CAST(f.key AS INTEGER) AS "index"
+        FROM messages m JOIN sources s ON s.id = m.source_id, json_each(m.attachments) f
+        WHERE m.anime_id = ? AND json_extract(f.value, '$.kind') = 'video'
+      ), ranked AS (
+        SELECT *, ROW_NUMBER() OVER (
+          PARTITION BY season, episode, voiceover, audioVariant, subtitleMode, sourceId
+          ORDER BY messageId DESC, "index"
+        ) AS position FROM videos
+      )
+      SELECT season, episode, voiceover, audioVariant, subtitleMode, sourceId, sourceTitle, messageId, "index"
+      FROM ranked WHERE position = 1
+      ORDER BY season IS NULL, season, episode IS NULL, episode, messageId DESC, "index", sourceId
+    `).all(resolveAnime(id)),
+    episode: (id, season, episode, before, beforeSource, material = 'all', source = '') => db.prepare(`
       SELECT m.*, s.title AS source_title, s.username FROM messages m JOIN sources s ON s.id = m.source_id
       WHERE m.anime_id = ? AND json_extract(m.result, '$.season') IS ? AND json_extract(m.result, '$.episode') IS ?
         AND (m.id, m.source_id) < (?, ?)
+        AND ($source = '' OR m.source_id = $source)
         AND ($material = 'all' OR EXISTS (
           SELECT 1 FROM json_each(m.attachments)
           WHERE json_extract(value, '$.kind') = CASE WHEN $material = 'subtitle' THEN 'subtitle' ELSE 'video' END
@@ -370,7 +502,7 @@ function openCatalog(file) {
         AND ($material <> 'dubbed-video' OR ${dubbedVideo})
         AND ($material <> 'subtitled-video' OR ${subtitledVideo})
       ORDER BY m.id DESC, m.source_id DESC LIMIT 50
-    `).all({ material }, resolveAnime(id), season, episode, before, beforeSource).map(decode),
+    `).all({ material, source }, resolveAnime(id), season, episode, before, beforeSource).map(decode),
     shikimoriTarget(now, id = null) {
       const row = db.prepare(`
         SELECT a.id, a.title, a.year,

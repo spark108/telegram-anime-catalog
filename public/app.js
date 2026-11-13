@@ -8,18 +8,27 @@ let sourceDialogsSignature;
 let catalogAfter = 0;
 let catalogVersion = 0;
 const animeKinds = { tv: 'ТВ-сериал', movie: 'Фильм', ova: 'OVA', ona: 'ONA', special: 'Спецвыпуск', tv_special: 'ТВ-спецвыпуск', music: 'Музыка' };
-const catalogFilterGroups = ['voiceovers', 'subtitles', 'years'];
+const catalogFilterGroups = ['sourceIds', 'voiceovers', 'subtitles', 'years'];
 let catalogFilters = normalizeCatalogFilters();
 const pendingCovers = new Map();
 let detailWaiting = false;
-let reviewBefore = {};
+let reviewPage = 1;
+let reviewVersion = 0;
 let refreshVersion = 0;
 let qrExpires = 0;
 const pendingPublications = new Map();
 const episodeViews = new Map();
+const episodeColumnLayout = matchMedia('(min-width: 56rem)');
+const seasonEpisodeOrder = new WeakMap();
+const collapsedSeasons = new Set();
 let episodeLayout = null;
 let episodeState;
 let episodeMaterial = 'all';
+let preferredEpisodeSource = '';
+let episodeSource = '';
+let episodeSourceOptions = '';
+let episodeSourceRequest = 0;
+let loadingEpisodeSource = false;
 const episodeMaterialCounts = { 'dubbed-video': 'dubbedVideos', 'subtitled-video': 'subtitledVideos', subtitle: 'subtitles' };
 let episodeReadEpoch = 0;
 let readingEpisodes = false;
@@ -508,6 +517,7 @@ function normalizeCatalogFilters(saved) {
     onlyVoiceovers: saved?.onlyVoiceovers === true,
     onlySubtitles: saved?.onlyVoiceovers !== true && saved?.onlySubtitles === true,
     tracking, onlyUnread: saved?.onlyUnread === true, includeBlacklist: saved?.includeBlacklist !== false,
+    sourceIds: Array.isArray(saved?.sourceIds) ? saved.sourceIds.filter(value => typeof value === 'string') : [],
     voiceovers: Array.isArray(saved?.voiceovers) ? saved.voiceovers.filter(value => typeof value === 'string') : [],
     subtitles: Array.isArray(saved?.subtitles) ? saved.subtitles.filter(value => typeof value === 'string') : [],
     years: Array.isArray(saved?.years) ? saved.years.filter(Number.isSafeInteger) : []
@@ -526,6 +536,7 @@ async function loadViewSettings() {
   }
   catalogFilters = normalizeCatalogFilters(settings.catalogFilters);
   episodeMaterial = settings.episodeMaterial === 'video' ? 'dubbed-video' : settings.episodeMaterial ?? 'all';
+  preferredEpisodeSource = settings.episodeSource ?? '';
   el('episode-material').value = episodeMaterial;
 }
 
@@ -545,8 +556,10 @@ function showCatalogFilters(options = {}) {
   form.elements.includeBlacklist.disabled = catalogFilters.tracking !== 'all';
   for (const name of catalogFilterGroups) {
     const selected = new Set(catalogFilters[name]);
-    const values = [...new Set([...(options[name] || []), ...selected])];
-    values.sort(name === 'years' ? (a, b) => b - a : (a, b) => a.localeCompare(b, 'ru'));
+    const sourceTitles = name === 'sourceIds' ? new Map((options.sources ?? []).map(({ id, title }) => [id, title])) : null;
+    const displayName = value => sourceTitles?.get(value) ?? String(value);
+    const values = [...new Set([...(sourceTitles ? sourceTitles.keys() : options[name] ?? []), ...selected])];
+    values.sort(name === 'years' ? (a, b) => b - a : (a, b) => displayName(a).localeCompare(displayName(b), 'ru'));
     const list = el('filter-' + name);
     list.replaceChildren(...values.map(value => {
       const label = document.createElement('label');
@@ -555,7 +568,7 @@ function showCatalogFilters(options = {}) {
       input.name = name;
       input.value = value;
       input.checked = selected.has(value);
-      label.append(input, document.createTextNode(value));
+      label.append(input, document.createTextNode(displayName(value)));
       return label;
     }));
     if (!values.length) list.textContent = 'Нет данных';
@@ -581,6 +594,7 @@ el('catalog-filters').onchange = action(async event => {
     onlyVoiceovers: material === 'voiceovers',
     onlySubtitles: material === 'subtitles',
     tracking, onlyUnread: unread.checked, includeBlacklist: blacklist.checked,
+    sourceIds: selected.getAll('sourceIds'),
     voiceovers: selected.getAll('voiceovers'),
     subtitles: selected.getAll('subtitles'),
     years: selected.getAll('years').map(Number)
@@ -657,8 +671,16 @@ async function loadCatalog(reset) {
   }
   const version = catalogVersion;
   const q = el('search').elements.q.value;
-  const rows = await api('catalog', { q, after: catalogAfter, filters: catalogFilters });
+  const result = await api('catalog', { q, after: catalogAfter, filters: catalogFilters, includeCounts: reset });
   if (version !== catalogVersion) return;
+  const rows = reset ? result.rows : result;
+  if (reset) {
+    for (const [id, count] of [['catalog-total', result.total], ['catalog-matched', result.matched]]) {
+      const counter = el(id);
+      counter.textContent = count.toLocaleString('ru-RU');
+      counter.hidden = false;
+    }
+  }
   const list = el('catalog-list');
   if (!rows.length && reset) {
     const empty = item('Тайтлы не найдены.');
@@ -701,11 +723,7 @@ async function loadCatalog(reset) {
       const filter = catalogFilters.tracking;
       if ((filter === 'tracked' && !tracked) || filter === 'untracked' ||
           (filter === 'blacklisted' && !blacklisted) || (filter === 'all' && blacklisted && !catalogFilters.includeBlacklist)) {
-        posterObserver.unobserve(frame);
-        pendingCovers.delete(row.id);
-        li.remove();
-        if (!list.children.length) return loadCatalog(true);
-        return;
+        return loadCatalog(true);
       }
       updatePosterMembership(link, marker, { tracked, blacklisted });
     });
@@ -767,11 +785,11 @@ function cursor(rows) {
   return rows.length ? { before: rows.at(-1).id, beforeSource: rows.at(-1).source_id } : {};
 }
 
-function messageItem(row, compact = false) {
+function reviewMessageItem(row) {
   const fields = row.result || {};
   const labels = [row.source_title, '#' + row.id,
-    compact || fields.season == null ? null : 'Сезон ' + fields.season,
-    compact || fields.episode == null ? null : 'Серия ' + fields.episode,
+    fields.season == null ? null : 'Сезон ' + fields.season,
+    fields.episode == null ? null : 'Серия ' + fields.episode,
     fields.voiceover ? 'Озвучка — ' + fields.voiceover : null, fields.audioVariant];
   const li = item(labels.filter(Boolean).join(' · '));
   if (fields.subtitles) {
@@ -781,32 +799,213 @@ function messageItem(row, compact = false) {
     line.textContent = [label, author ? 'Автор — ' + author : null, styled ? 'С оформлением' : null].filter(Boolean).join(' · ');
     li.append(line);
   }
-  for (const [position, attachment] of row.attachments.entries()) {
+  for (const attachment of row.attachments) {
     const line = document.createElement('p');
     const size = attachment.width && attachment.height ? attachment.width + '×' + attachment.height : null;
     const format = attachment.fileName?.match(/\.([a-z0-9]+)$/i)?.[1].toUpperCase();
     line.textContent = [attachment.fileName || attachment.kind, format, size].filter(Boolean).join(' · ');
     li.append(line);
-    if (['video', 'subtitle'].includes(attachment.kind)) {
-      li.append(publishControls(row, attachment.attachmentIndex ?? position));
-    }
   }
-  if (row.text && (!compact || !row.attachments.length)) {
+  if (row.text) {
     const text = document.createElement('pre');
     text.textContent = row.text;
     li.append(text);
   }
-  const channel = /^-100(\d+)(?::\d+)?$/.exec(row.source_id)?.[1];
-  if (row.username || channel) {
-    const link = document.createElement('a');
-    link.href = 'https://t.me/' + (row.username ? encodeURIComponent(row.username) : 'c/' + channel) + '/' + row.id;
-    link.target = '_blank';
-    link.rel = 'noreferrer';
-    link.textContent = 'Открыть сообщение в Telegram';
-    li.append(link);
-  }
+  const link = telegramMessageLink(row);
+  if (link) li.append(link);
   return li;
 }
+
+function telegramMessageLink(row) {
+  return telegramMessageLinks(row.source_id, row.username, row.id, 'Открыть сообщение в Telegram');
+}
+
+function telegramMessageLinks(chatId, username, messageId, label, topicId) {
+  const [, channel, sourceTopic] = /^-100(\d+)(?::(\d+))?$/.exec(chatId) ?? [];
+  if (!username && !channel) return null;
+  const thread = topicId ?? sourceTopic;
+  const params = new URLSearchParams(username ? { domain: username, post: messageId } : { channel, post: messageId });
+  if (thread) params.set('thread', thread);
+  const link = document.createElement('a');
+  link.href = 'tg://' + (username ? 'resolve' : 'privatepost') + '?' + params;
+  link.textContent = label;
+  const web = document.createElement('a');
+  web.href = 'https://t.me/' + (username ? encodeURIComponent(username) : 'c/' + channel) + '/' + messageId;
+  if (thread) web.href += '?' + new URLSearchParams({ thread });
+  web.target = '_blank';
+  web.rel = 'noreferrer';
+  web.textContent = 'В браузере';
+  const links = document.createElement('span');
+  links.append(link, document.createTextNode(' · '), web);
+  return links;
+}
+
+function episodeReleaseCard(row) {
+  const card = item('');
+  card.className = 'release-card';
+  const header = document.createElement('div');
+  header.className = 'release-header';
+  const title = document.createElement('strong');
+  title.textContent = row.source_title || 'Telegram';
+  const message = document.createElement('span');
+  message.className = 'release-message';
+  message.textContent = '#' + row.id;
+  header.append(title, message);
+  card.append(header);
+
+  const { voiceover, audioVariant, subtitles } = row.result || {};
+  const credits = [
+    voiceover && 'Озвучка: ' + voiceover,
+    audioVariant && audioVariant !== voiceover && audioVariant,
+    subtitles && (subtitles.author ? 'Субтитры: ' + subtitles.author : 'Субтитры'),
+    subtitles?.styled && 'С оформлением'
+  ].filter(Boolean);
+  if (credits.length) card.append(releaseTags(credits));
+
+  for (const [position, file] of row.attachments.entries()) {
+    const block = document.createElement('div');
+    block.className = 'release-file';
+    const name = document.createElement('strong');
+    const kinds = { video: 'Видео', subtitle: 'Файл субтитров', photo: 'Фото', animation: 'GIF', file: 'Файл' };
+    name.textContent = file.fileName || kinds[file.kind] || 'Вложение';
+    block.append(name);
+    const format = file.fileName?.match(/\.([a-z0-9]+)$/i)?.[1].toUpperCase();
+    const resolution = file.width && file.height ? file.width + ' × ' + file.height : null;
+    const details = [format, resolution].filter(Boolean);
+    if (details.length) block.append(releaseTags(details));
+    if (file.kind === 'video' || file.kind === 'subtitle') {
+      const index = file.attachmentIndex ?? position;
+      const actions = document.createElement('div');
+      actions.className = 'release-actions';
+      block.append(actions);
+      actions.append(publishControls(row, index));
+    }
+    card.append(block);
+  }
+  if (!row.attachments.length && row.text) {
+    const text = document.createElement('pre');
+    text.textContent = row.text;
+    card.append(text);
+  }
+  const link = telegramMessageLink(row);
+  if (link) {
+    link.className = 'release-telegram-link';
+    card.append(link);
+  }
+  return card;
+}
+
+function releaseTags(values) {
+  const tags = document.createElement('div');
+  tags.className = 'release-tags';
+  for (const value of values) {
+    const tag = document.createElement('span');
+    tag.textContent = value;
+    tags.append(tag);
+  }
+  return tags;
+}
+
+const animePlayer = el('anime-video');
+const playbackCover = el('anime-video-cover');
+const playbackStatus = el('anime-video-status');
+const playbackStart = el('anime-video-start');
+const playbackSeason = el('playback-season');
+const playbackEpisode = el('playback-episode');
+const playbackVoice = el('playback-voice');
+const playbackSource = el('playback-source');
+let playbackRows = [];
+let playbackSources = new Map();
+let playbackVersion = 0;
+
+function playbackNotice(text, canStart = false) {
+  playbackCover.hidden = false;
+  playbackStatus.textContent = text;
+  playbackStatus.hidden = !text;
+  playbackStart.hidden = !canStart;
+}
+
+function fillPlaybackSelect(select, entries) {
+  select.replaceChildren(...Array.from(entries, ([value, label]) => option(label, value)));
+  select.disabled = !select.options.length;
+}
+
+function playbackVoiceLabel(row) {
+  const names = [...new Set([row.voiceover, row.audioVariant].filter(Boolean))];
+  if (names.length) return names.join(' · ');
+  return row.subtitleMode === 'video' ? 'Видео с субтитрами' : 'Озвучка не указана';
+}
+
+function updatePlaybackChoices(from) {
+  const seasonRows = playbackRows.filter(row => String(row.season ?? '') === playbackSeason.value);
+  if (from === 'season') {
+    fillPlaybackSelect(playbackEpisode, new Map(seasonRows.map(({ episode }) => [
+      String(episode ?? ''), episode === null ? 'Без номера серии' : 'Серия ' + episode
+    ])));
+  }
+  const episodeRows = seasonRows.filter(row => String(row.episode ?? '') === playbackEpisode.value);
+  if (from !== 'voice') {
+    const voices = [...new Set(episodeRows.map(playbackVoiceLabel))].sort((a, b) => a.localeCompare(b, 'ru'));
+    fillPlaybackSelect(playbackVoice, voices.map(voice => [voice, voice]));
+  }
+  playbackSources = new Map();
+  for (const row of episodeRows) {
+    if (playbackVoiceLabel(row) === playbackVoice.value && !playbackSources.has(row.sourceId)) {
+      playbackSources.set(row.sourceId, row);
+    }
+  }
+  fillPlaybackSelect(playbackSource, [...playbackSources.values()]
+    .sort((a, b) => a.sourceTitle.localeCompare(b.sourceTitle, 'ru')).map(row => [row.sourceId, row.sourceTitle]));
+}
+
+async function loadPlaybackChoices(id) {
+  el('anime-playback').hidden = false;
+  try {
+    playbackRows = await api('video-options?' + new URLSearchParams({ id }));
+    fillPlaybackSelect(playbackSeason, new Map(playbackRows.map(({ season }) => [
+      String(season ?? ''), season === null ? 'Сезон не указан' : 'Сезон ' + season
+    ])));
+    updatePlaybackChoices('season');
+    playbackNotice(playbackRows.length ? '' : 'У этого тайтла пока нет видео.', Boolean(playbackRows.length));
+  } catch (error) {
+    playbackNotice(error.message);
+  }
+}
+
+async function playSelectedVideo() {
+  const version = ++playbackVersion;
+  const selected = playbackSources.get(playbackSource.value);
+  animePlayer.pause();
+  animePlayer.hidden = true;
+  animePlayer.removeAttribute('src');
+  animePlayer.load();
+  if (!selected) return playbackNotice('Видео недоступно.');
+  playbackNotice('Загружаем видео…');
+  const { sourceId, messageId, index } = selected;
+  try {
+    const { url } = await api('video-playback', { sourceId, messageId, index });
+    if (version !== playbackVersion || el('details').hidden) return;
+    animePlayer.src = url;
+    animePlayer.hidden = false;
+    playbackCover.hidden = true;
+    await animePlayer.play().catch(() => {});
+  } catch (error) {
+    if (version === playbackVersion) playbackNotice(error.message, true);
+  }
+}
+
+for (const [select, from] of [[playbackSeason, 'season'], [playbackEpisode, 'episode'], [playbackVoice, 'voice']]) {
+  select.onchange = () => {
+    updatePlaybackChoices(from);
+    void playSelectedVideo();
+  };
+}
+playbackSource.onchange = playbackStart.onclick = playSelectedVideo;
+animePlayer.addEventListener('error', () => {
+  if (!animePlayer.hasAttribute('src')) return;
+  animePlayer.hidden = true;
+  playbackNotice('Не удалось воспроизвести видео из этого источника.', true);
+});
 
 function publishControls(row, index) {
   const key = { sourceId: row.source_id, messageId: row.id, index };
@@ -879,15 +1078,10 @@ function publishControls(row, index) {
       const text = state.channel + ' · ' + labels[state.status] + history;
       const li = item(text + (state.error ? ' · ' + state.error : ''));
       if (state.status === 'failed') li.className = 'publication-failed';
-      const channel = /^-100(\d+)$/.exec(state.chatId || state.channelId)?.[1];
-      if (state.sentMessageId && (state.username || channel)) {
-        const link = document.createElement('a');
-        link.href = 'https://t.me/' + (state.username ? encodeURIComponent(state.username) : 'c/' + channel) + '/' + state.sentMessageId;
-        link.target = '_blank';
-        link.rel = 'noreferrer';
-        link.textContent = 'Открыть';
-        li.append(document.createTextNode(' · '), link);
-      }
+      const links = state.sentMessageId && telegramMessageLinks(
+        state.chatId || state.channelId, state.username, state.sentMessageId, 'Открыть в Telegram', state.topicId
+      );
+      if (links) li.append(document.createTextNode(' · '), links);
       return li;
     }));
     statuses.hidden = !states.length;
@@ -1003,6 +1197,7 @@ function episodeDetails(id, group) {
     const currentVersion = ++version;
     if (markRead) episodeReadEpoch++;
     const material = episodeMaterial;
+    const source = episodeSource;
     const attachmentKind = material === 'subtitle' ? 'subtitle' : 'video';
     busy = true;
     more.disabled = true;
@@ -1014,10 +1209,10 @@ function episodeDetails(id, group) {
       }
     }
     try {
-      const rows = markRead ? await api('episode-open', { id, season: group.season, episode: group.episode, material })
-        : await api('episode?' + new URLSearchParams({ id, season: group.season ?? '', episode: group.episode ?? '', material,
+      const rows = markRead ? await api('episode-open', { id, season: group.season, episode: group.episode, material, source })
+        : await api('episode?' + new URLSearchParams({ id, season: group.season ?? '', episode: group.episode ?? '', material, source,
           ...(reset ? {} : before) }));
-      if (version !== currentVersion) return;
+      if (version !== currentVersion || source !== episodeSource || material !== episodeMaterial) return;
       if (markRead) {
         episodeReadEpoch++;
         group.unread = 0;
@@ -1030,7 +1225,7 @@ function episodeDetails(id, group) {
           const attachments = row.attachments.map((file, index) => ({ ...file, attachmentIndex: index })).filter(file => kind === 'other'
             ? !['video', 'subtitle'].includes(file.kind) : file.kind === kind);
           if (attachments.length || (kind === 'other' && !row.attachments.length)) {
-            list.append(messageItem({ ...row, attachments }, true));
+            list.append(episodeReleaseCard({ ...row, attachments }));
             block.hidden = false;
           }
         }
@@ -1047,17 +1242,18 @@ function episodeDetails(id, group) {
 }
 
 async function loadAnime(id) {
-  const page = await api('anime-page?' + new URLSearchParams({ id }));
+  const page = await api('anime-page?' + new URLSearchParams({ id, source: preferredEpisodeSource }));
   if (page.anime.id !== Number(id)) {
     location.replace('/anime/' + page.anime.id + location.search);
     return;
   }
+  episodeSource = page.source;
   showAnimeInfo(page);
   detailMembershipMenu = membershipMenu(page.anime.id, page, page.anime.title, async membership => {
     const epoch = ++episodeReadEpoch;
     if (episodeState) episodeState = { ...episodeState, ...membership };
     updateDetailMembership(membership);
-    const state = await api('tracking-episodes?' + new URLSearchParams({ id }));
+    const state = await api('tracking-episodes?' + new URLSearchParams({ id, source: episodeSource }));
     if (epoch === episodeReadEpoch) showEpisodes(id, state);
   });
   el('anime-poster-card').append(detailMembershipMenu.element);
@@ -1071,6 +1267,7 @@ async function loadAnime(id) {
   back.href = '/?' + backParams;
   back.textContent = fromBlacklist ? '← К черному списку' : detailOrigin === 'tracking' ? '← К отслеживанию' : '← К каталогу';
   showEpisodes(id, page);
+  void loadPlaybackChoices(id);
 }
 
 el('anime-merge-search').onsubmit = action(async event => {
@@ -1116,6 +1313,29 @@ el('episode-material').onchange = action(async event => {
   await Promise.all([saving, ...opened.map(entry => entry.reloadMaterials())]);
 });
 
+el('episode-source').onchange = action(async event => {
+  const source = event.currentTarget.value;
+  const request = ++episodeSourceRequest;
+  const list = el('anime-episodes');
+  loadingEpisodeSource = list.inert = true;
+  updateReadControls();
+  try {
+    const state = await api('tracking-episodes?' + new URLSearchParams({ id: detailId, source }));
+    if (request !== episodeSourceRequest) return;
+    ++episodeReadEpoch;
+    preferredEpisodeSource = episodeSource = source;
+    showEpisodes(detailId, state);
+    const opened = [...episodeViews.values()].filter(({ section }) => section.open && section.isConnected);
+    await Promise.all([saveViewSettings({ episodeSource: source }), ...opened.map(entry => entry.reloadMaterials())]);
+  } finally {
+    if (request === episodeSourceRequest) {
+      loadingEpisodeSource = list.inert = false;
+      el('episode-source').value = episodeSource;
+      updateReadControls();
+    }
+  }
+});
+
 el('episode-read-all').onclick = action(() => markEpisodesRead());
 
 async function markEpisodesRead(season) {
@@ -1123,7 +1343,7 @@ async function markEpisodesRead(season) {
   const epoch = ++episodeReadEpoch;
   updateReadControls();
   try {
-    const state = await api('tracking-episodes', { id: Number(detailId), season });
+    const state = await api('tracking-episodes', { id: Number(detailId), season, source: episodeSource });
     if (epoch === episodeReadEpoch) {
       episodeReadEpoch++;
       showEpisodes(detailId, state);
@@ -1136,9 +1356,9 @@ async function markEpisodesRead(season) {
 
 function updateReadControls() {
   const unreadSeasons = new Set(episodeState?.episodes.filter(group => group.unread).map(group => group.season));
-  el('episode-read-all').disabled = readingEpisodes || !unreadSeasons.size;
+  el('episode-read-all').disabled = loadingEpisodeSource || readingEpisodes || !unreadSeasons.size;
   for (const control of el('anime-episodes').querySelectorAll('[data-read-season]')) {
-    control.disabled = readingEpisodes || !unreadSeasons.has(Number(control.dataset.readSeason));
+    control.disabled = loadingEpisodeSource || readingEpisodes || !unreadSeasons.has(Number(control.dataset.readSeason));
   }
 }
 
@@ -1150,9 +1370,38 @@ function updateDetailMembership(state) {
   detailMembershipMenu?.update(state);
 }
 
+function layoutSeasonEpisodes(body, episodes) {
+  seasonEpisodeOrder.set(body, episodes);
+  const twoColumns = episodeColumnLayout.matches && episodes.length > 1;
+  body.classList.toggle('has-columns', twoColumns);
+  if (!twoColumns) {
+    body.replaceChildren(...episodes);
+    return;
+  }
+
+  const columns = [document.createElement('div'), document.createElement('div')];
+  for (const column of columns) column.className = 'episode-column';
+  for (const [index, episode] of episodes.entries()) columns[index % 2].append(episode);
+  body.replaceChildren(...columns);
+}
+
+episodeColumnLayout.addEventListener('change', () => {
+  for (const body of el('anime-episodes').querySelectorAll('.season-episodes')) {
+    layoutSeasonEpisodes(body, seasonEpisodeOrder.get(body));
+  }
+});
+
 function showEpisodes(id, state) {
   episodeState = state;
-  const { episodes } = state;
+  const { episodes, sources } = state;
+  const sourceSelect = el('episode-source');
+  const choices = [...sources].sort((a, b) => a.title.localeCompare(b.title, 'ru'));
+  const signature = JSON.stringify(choices);
+  if (signature !== episodeSourceOptions) {
+    episodeSourceOptions = signature;
+    sourceSelect.replaceChildren(option('Все источники', ''), ...choices.map(({ id, title }) => option(title, id)));
+  }
+  if (!loadingEpisodeSource) sourceSelect.value = episodeSource;
   updateDetailMembership(state);
   const seasons = new Map();
   const active = new Set();
@@ -1174,7 +1423,7 @@ function showEpisodes(id, state) {
   for (const key of episodeViews.keys()) {
     if (!active.has(key)) episodeViews.delete(key);
   }
-  const layout = JSON.stringify([episodeMaterial, visible]);
+  const layout = JSON.stringify([episodeSource, episodeMaterial, visible]);
   if (episodeLayout === layout) {
     updateReadControls();
     return;
@@ -1185,11 +1434,24 @@ function showEpisodes(id, state) {
   for (const [season, groups] of seasons) {
     const section = document.createElement('section');
     section.className = 'season-list';
+    const body = document.createElement('div');
+    body.className = 'season-episodes';
+    body.id = 'season-episodes-' + (season ?? 'unknown');
+    body.hidden = collapsedSeasons.has(season);
     if (season !== null || seasons.size > 1) {
       const header = document.createElement('div');
       header.className = 'season-heading';
       const heading = document.createElement('h3');
-      heading.textContent = season === null ? 'Сезон не указан' : 'Сезон ' + season;
+      const toggle = button(season === null ? 'Сезон не указан' : 'Сезон ' + season, () => {
+        body.hidden = !body.hidden;
+        if (body.hidden) collapsedSeasons.add(season);
+        else collapsedSeasons.delete(season);
+        toggle.setAttribute('aria-expanded', String(!body.hidden));
+      });
+      toggle.className = 'season-toggle';
+      toggle.setAttribute('aria-controls', body.id);
+      toggle.setAttribute('aria-expanded', String(!body.hidden));
+      heading.append(toggle);
       header.append(heading);
       if (season !== null) {
         const readSeason = button('Прочитать всё', () => markEpisodesRead(season));
@@ -1199,11 +1461,14 @@ function showEpisodes(id, state) {
       }
       section.append(header);
     }
-    section.append(...groups);
+    if (season === null && seasons.size === 1) body.hidden = false;
+    layoutSeasonEpisodes(body, groups);
+    section.append(body);
     sections.push(section);
   }
   list.replaceChildren(...sections);
-  if (!seasons.size) list.textContent = episodeMaterial === 'all' ? 'Материалов пока нет.' : 'Нет материалов выбранного типа.';
+  if (!seasons.size) list.textContent = episodeSource ? 'Нет материалов по выбранным фильтрам.'
+    : episodeMaterial === 'all' ? 'Материалов пока нет.' : 'Нет материалов выбранного типа.';
   updateReadControls();
 }
 
@@ -1267,24 +1532,66 @@ for (const tab of trackingTabs) {
 }
 showTrackingTabs();
 
-async function loadReview(reset) {
-  if (reset) {
-    reviewBefore = {};
-    el('review-list').replaceChildren();
-  }
-  const rows = await api('review?' + new URLSearchParams(reviewBefore));
+async function loadReview(page = reviewPage) {
+  const version = ++reviewVersion;
+  const sourceSelect = el('review-source');
+  const source = sourceSelect.value;
+  const pageSize = el('review-page-size').value;
   const list = el('review-list');
-  if (!rows.length && reset) list.append(item('Очередь пуста.'));
-  for (const row of rows) {
-    const li = messageItem(row);
-    const issue = document.createElement('p');
-    issue.textContent = row.issue;
-    li.append(issue, button('Указать тайтл', () => editAssignment(li, row)));
-    list.append(li);
+  const pagination = el('review-pagination');
+  list.inert = pagination.inert = true;
+  list.setAttribute('aria-busy', 'true');
+  try {
+    const result = await api('review?' + new URLSearchParams({ source, page, pageSize }));
+    if (version !== reviewVersion) return;
+    reviewPage = result.page;
+    const choices = result.sources.sort((a, b) => a.title.localeCompare(b.title, 'ru'));
+    const previousTitle = sourceSelect.selectedOptions[0]?.textContent;
+    if (source && !choices.some(entry => entry.id === source)) choices.push({ id: source, title: previousTitle });
+    sourceSelect.replaceChildren(option('Все источники', ''), ...choices.map(({ id, title }) => option(title, id)));
+    sourceSelect.value = source;
+    list.replaceChildren(...(result.rows.length ? result.rows.map(row => {
+      const li = reviewMessageItem(row);
+      const issue = document.createElement('p');
+      issue.textContent = row.issue;
+      li.append(issue, button('Указать тайтл', () => editAssignment(li, row)));
+      return li;
+    }) : [item(source ? 'У этого источника нет сообщений на проверку.' : 'Очередь пуста.')]));
+    showReviewPages(result.page, result.pages);
+  } finally {
+    if (version === reviewVersion) {
+      list.inert = pagination.inert = false;
+      list.removeAttribute('aria-busy');
+    }
   }
-  reviewBefore = cursor(rows);
-  el('more-review').hidden = rows.length < 50;
 }
+
+function showReviewPages(page, pages) {
+  const pagination = el('review-pagination');
+  pagination.hidden = pages <= 1;
+  if (pagination.hidden) return;
+  const go = target => async () => {
+    await loadReview(target);
+    el('review').scrollIntoView({ block: 'start' });
+    pagination.querySelector('[aria-current="page"]')?.focus({ preventScroll: true });
+  };
+  const previous = button('Назад', go(page - 1));
+  previous.disabled = page === 1;
+  const next = button('Вперёд', go(page + 1));
+  next.disabled = page === pages;
+  const numbers = [...new Set([1, page - 1, page, page + 1, pages])].filter(number => number >= 1 && number <= pages);
+  const controls = [previous];
+  for (const [index, number] of numbers.entries()) {
+    if (index && number - numbers[index - 1] > 1) controls.push(document.createTextNode('…'));
+    const control = button(String(number), go(number));
+    control.setAttribute('aria-label', 'Страница ' + number);
+    if (number === page) control.setAttribute('aria-current', 'page');
+    controls.push(control);
+  }
+  pagination.replaceChildren(...controls, next);
+}
+
+el('review-source').onchange = el('review-page-size').onchange = action(() => loadReview(1));
 
 function editAssignment(li, row) {
   if (li.querySelector('form')) return;
@@ -1308,7 +1615,7 @@ function editAssignment(li, row) {
       sourceId: row.source_id, messageId: row.id, animeId: select.value ? Number(select.value) : null,
       title: input.value, year: row.result?.year
     });
-    await loadReview(true);
+    await loadReview();
   });
   li.append(form);
   return find();
@@ -1505,12 +1812,19 @@ el('more-catalog').onclick = action(async event => {
   control.disabled = true;
   try { await loadCatalog(false); } finally { control.disabled = false; }
 });
-el('more-review').onclick = action(() => loadReview(false));
 
 const detailId = /^\/anime\/([1-9]\d*)\/?$/.exec(location.pathname)?.[1];
 const detailOrigin = new URLSearchParams(location.search).get('from') === 'tracking' ? 'tracking' : 'catalog';
 
 function showView(next) {
+  if (view === 'details' && next !== view) {
+    playbackVersion++;
+    animePlayer.pause();
+    animePlayer.hidden = true;
+    animePlayer.removeAttribute('src');
+    animePlayer.load();
+    playbackNotice('', Boolean(playbackSources.size));
+  }
   el(view).hidden = true;
   view = next;
   el('app-header').hidden = next === 'login-scene';
@@ -1538,7 +1852,7 @@ async function loadRoute() {
     await Promise.all([loadCatalog(true), loadCatalogFilters()]);
   } else if (query.get('view') === 'review') {
     showView('review');
-    await loadReview(true);
+    await loadReview();
   } else if (query.get('view') === 'publication') {
     showView('publication');
     await loadPublicationSettings();
@@ -1548,6 +1862,9 @@ async function loadRoute() {
   } else if (query.get('view') === 'sources') {
     showView('sources');
     await loadSources();
+  } else if (query.get('view') === 'analysis-log') {
+    showView('analysis-log');
+    await loadAnalysisLog();
   } else {
     location.replace('/');
   }
@@ -1564,14 +1881,48 @@ for (const tab of document.querySelectorAll('[data-view]')) {
     const path = next === 'catalog' ? catalogPath() : next === 'tracking' ? trackingPath() : '/?' + new URLSearchParams({ view: next });
     history.replaceState(null, '', path);
     if (view === 'catalog') await Promise.all([loadCatalog(true), loadCatalogFilters()]);
-    if (view === 'review') await loadReview(true);
+    if (view === 'review') await loadReview();
     if (view === 'publication') await loadPublicationSettings();
     if (view === 'tracking') await loadTracking();
     if (view === 'sources') await refresh();
+    if (view === 'analysis-log') await loadAnalysisLog();
   });
 }
 
+let logSession = '';
+let logEntries = [];
+let pollingLog = false;
+const logDateTime = new Intl.DateTimeFormat('ru-RU', {
+  day: '2-digit', month: '2-digit', year: 'numeric',
+  hour: '2-digit', minute: '2-digit', second: '2-digit'
+});
+async function loadAnalysisLog() {
+  if (pollingLog) return;
+  pollingLog = true;
+  try {
+    const { session, entries } = await api('analysis-log?' + new URLSearchParams({
+      session: logSession, after: logEntries.at(-1)?.id ?? 0
+    }));
+    if (session === logSession && !entries.length) return;
+    const screen = el('analysis-console');
+    const atBottom = screen.scrollHeight - screen.scrollTop - screen.clientHeight < 24;
+    const oldTop = screen.scrollTop;
+    if (session !== logSession) logEntries = [];
+    logSession = session;
+    logEntries = [...logEntries, ...entries].slice(-1000);
+    screen.textContent = logEntries.length
+      ? logEntries.map(entry => '[' + logDateTime.format(entry.processedAt) + '] ' + entry.line).join('\n')
+      : 'Ожидаем сообщения…';
+    screen.scrollTop = atBottom ? screen.scrollHeight : oldTop;
+  } finally {
+    pollingLog = false;
+  }
+}
+
 refresh().catch(error => notice(error.message));
+setInterval(() => {
+  if (view === 'analysis-log') loadAnalysisLog().catch(() => {});
+}, 1000);
 setInterval(updateQrVisibility, 1000);
 setInterval(() => {
   if (['login-scene', 'sources'].includes(view) && el('unlock').hidden) refresh().catch(error => notice(error.message));
@@ -1612,7 +1963,7 @@ setInterval(async () => {
     if (view === 'tracking') await loadTracking();
     else {
       const epoch = episodeReadEpoch;
-      const state = await api('tracking-episodes?' + new URLSearchParams({ id: detailId }));
+      const state = await api('tracking-episodes?' + new URLSearchParams({ id: detailId, source: episodeSource }));
       if (epoch === episodeReadEpoch) showEpisodes(detailId, state);
     }
   } catch {

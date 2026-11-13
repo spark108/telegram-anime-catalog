@@ -442,6 +442,44 @@ function createTelegram(catalog) {
       }
       return { topics, next };
     },
+    async videoStream(source, messageId, attachment) {
+      const active = requireClient();
+      const { bigInt } = load();
+      const [message] = await active.getMessages(inputPeer(source), { ids: [messageId] });
+      const document = message?.document;
+      if (!document) throw new Error('Видео больше недоступно в Telegram.');
+      const current = serialize(message).attachments[0];
+      const matches = attachment.documentId ? current.documentId === attachment.documentId
+        : current.fileName === (attachment.fileName ?? null) &&
+          (attachment.size == null || current.size === String(attachment.size));
+      if (current.kind !== 'video' || !matches) throw new Error('Видео в исходном сообщении изменилось.');
+      if (message.noforwards || message.chat?.noforwards) throw new Error('Это видео можно открыть в Telegram.');
+      const size = Number(document.size);
+      if (!Number.isSafeInteger(size) || size <= 0) throw new Error('Не удалось определить размер видео.');
+      const mimeType = /^video\/[a-z0-9.+-]+$/i.test(document.mimeType) ? document.mimeType : 'video/mp4';
+      return {
+        size, mimeType,
+        async *read(start, end, signal) {
+          const requestSize = 512 * 1024;
+          const offset = Math.floor(start / requestSize) * requestSize;
+          let position = offset;
+          let remaining = end - start + 1;
+          for await (const chunk of active.iterDownload({
+            file: message.media, offset: bigInt(offset), requestSize,
+            limit: Math.ceil((end - offset + 1) / requestSize)
+          })) {
+            if (signal.aborted) return;
+            const skip = Math.max(0, start - position);
+            const data = chunk.subarray(skip, skip + remaining);
+            position += chunk.length;
+            remaining -= data.length;
+            yield data;
+            if (!remaining) return;
+          }
+          if (remaining && !signal.aborted) throw new Error('Telegram вернул неполный файл.');
+        }
+      };
+    },
     async publishMedia({ source, destination, attachment, messageId, caption, mode, randomId }) {
       const active = requireClient();
       const { Api, bigInt } = load();
@@ -536,7 +574,9 @@ function serialize(message) {
     const fileName = document.attributes?.find(attribute => attribute.className === 'DocumentAttributeFilename')?.fileName || null;
     const mimeType = document.mimeType || null;
     const video = document.attributes?.find(attribute => attribute.className === 'DocumentAttributeVideo');
-    const kind = video || mimeType?.startsWith('video/') ? 'video'
+    const animation = document.attributes?.some(attribute => attribute.className === 'DocumentAttributeAnimated')
+      || mimeType === 'image/gif' || /\.gif$/i.test(fileName || '');
+    const kind = animation ? 'animation' : video || mimeType?.startsWith('video/') ? 'video'
       : /\.(ass|ssa|srt|vtt|sub|sup)$/i.test(fileName || '') ? 'subtitle' : 'file';
     attachments.push({
       kind, fileName, mimeType, size: document.size == null ? null : String(document.size), documentId: String(document.id),

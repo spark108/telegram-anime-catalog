@@ -18,6 +18,7 @@
       <button type="button" data-view="publication">Публикация</button>
       <button type="button" data-view="review">На проверку</button>
       <button type="button" data-view="sources">Источники</button>
+      <button type="button" data-view="analysis-log">Лог</button>
     </nav>
     <button type="button" id="logout">Выйти</button>
   </header>
@@ -92,6 +93,7 @@
                 <button type="button" data-load-analyzer disabled>Загрузить из анализаторов по умолчанию</button>
               </div>
               <label>JavaScript <textarea name="code" class="code" rows="18" spellcheck="false" required></textarea></label>
+              <p class="muted">Чтобы исключить сообщение из каталога и очереди проверки, верните <code>{ skip: true }</code>.</p>
               <button disabled>Сохранить и запустить анализ</button>
               <p data-analyzer-status role="status" hidden></p>
             </form>
@@ -116,7 +118,7 @@
     </section>
     <section id="catalog" hidden>
       <div class="catalog-heading">
-        <h2>Каталог</h2>
+        <h2>Каталог <span id="catalog-total" class="catalog-count" aria-live="polite" hidden></span></h2>
         <form id="search" class="row">
           <input name="q" type="search" aria-label="Название" placeholder="Название аниме">
           <button>Найти</button>
@@ -124,7 +126,7 @@
       </div>
       <div class="catalog-layout">
         <aside class="panel catalog-sidebar" aria-labelledby="catalog-filter-title">
-          <h3 id="catalog-filter-title">Фильтры</h3>
+          <h3 id="catalog-filter-title">Фильтры <span id="catalog-matched" class="catalog-count" aria-live="polite" hidden></span></h3>
           <form id="catalog-filters">
             <fieldset>
               <legend>Отслеживание</legend>
@@ -141,6 +143,7 @@
               <label><input type="radio" name="material" value="voiceovers"> Только озвучка</label>
               <label><input type="radio" name="material" value="subtitles"> Только субтитры</label>
             </fieldset>
+            <fieldset><legend>Источник</legend><div id="filter-sourceIds" class="catalog-filter-options"></div></fieldset>
             <fieldset><legend>Озвучки</legend><div id="filter-voiceovers" class="catalog-filter-options"></div></fieldset>
             <fieldset><legend>Субтитры</legend><div id="filter-subtitles" class="catalog-filter-options"></div></fieldset>
             <fieldset><legend>Год</legend><div id="filter-years" class="catalog-filter-options"></div></fieldset>
@@ -185,10 +188,28 @@
         </form>
         <p id="anime-merge-status" role="status" hidden></p>
       </details>
+      <section id="anime-playback" class="panel anime-playback" aria-label="Плеер" hidden>
+        <div class="anime-playback-screen">
+          <video id="anime-video" controls playsinline preload="none" aria-label="Видео из Telegram" hidden></video>
+          <div id="anime-video-cover" class="anime-video-cover">
+            <button id="anime-video-start" type="button" hidden>▶ Смотреть</button>
+            <p id="anime-video-status" role="status">Загружаем список видео…</p>
+          </div>
+        </div>
+        <div class="anime-playback-choices">
+          <label>Сезон<select id="playback-season" disabled></select></label>
+          <label>Серия<select id="playback-episode" disabled></select></label>
+          <label>Озвучка<select id="playback-voice" disabled></select></label>
+          <label>Источник<select id="playback-source" disabled></select></label>
+        </div>
+      </section>
       <div class="episode-section">
         <div class="episode-section-heading">
           <h2>Серии</h2>
           <div class="row episode-section-actions">
+            <select id="episode-source" aria-label="Источник серий">
+              <option value="">Все источники</option>
+            </select>
             <select id="episode-material" aria-label="Материалы серий">
               <option value="all">Все</option>
               <option value="dubbed-video">Видео с озвучкой</option>
@@ -248,9 +269,23 @@
       </form>
     </section>
     <section id="review" class="panel" hidden>
-      <h2>На проверку</h2>
+      <div class="review-heading">
+        <h2>На проверку</h2>
+        <div class="row review-filters">
+          <label>Источник<select id="review-source"><option value="">Все источники</option></select></label>
+          <label>На странице<select id="review-page-size">
+            <option value="25">25</option>
+            <option value="50" selected>50</option>
+            <option value="100">100</option>
+          </select></label>
+        </div>
+      </div>
       <ul id="review-list" class="entries"></ul>
-      <button type="button" id="more-review" hidden>Ещё сообщения</button>
+      <nav id="review-pagination" aria-label="Страницы очереди" hidden></nav>
+    </section>
+    <section id="analysis-log" hidden>
+      <h2>Лог анализа</h2>
+      <pre id="analysis-console" tabindex="0" aria-label="Журнал обработки сообщений">Ожидаем сообщения…</pre>
     </section>
   </main>
 </body>

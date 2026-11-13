@@ -55,7 +55,8 @@ function openTracking(db) {
       SUM(CASE WHEN t.anime_id IS NOT NULL AND ${isUnread} THEN 1 ELSE 0 END) AS unread
     FROM messages m LEFT JOIN tracked_anime t ON t.anime_id = m.anime_id AND t.blacklisted_at IS NULL
     ${readJoin}
-    WHERE m.anime_id = ? GROUP BY ${season}, ${episode}
+    WHERE m.anime_id = $id AND ($source = '' OR m.source_id = $source)
+    GROUP BY ${season}, ${episode}
     ORDER BY ${season} IS NOT NULL, ${season}, ${episode} IS NULL, ${episode}
   `);
   const list = db.prepare(`
@@ -78,6 +79,7 @@ function openTracking(db) {
     SELECT m.anime_id, COALESCE(${season}, -1), COALESCE(${episode}, -1), m.source_id, m.id, m.attachments, m.text
     FROM messages m JOIN tracked_anime t ON t.anime_id = m.anime_id
     WHERE t.blacklisted_at IS NULL AND m.anime_id = $id
+      AND ($source = '' OR m.source_id = $source)
       AND ($scope = 'all' OR ${season} IS $season)
       AND ($scope <> 'episode' OR ${episode} IS $episode)
       AND (m.result IS NOT NULL OR m.manual_anime_id IS NOT NULL)
@@ -95,7 +97,7 @@ function openTracking(db) {
     WHERE t.blacklisted_at IS NOT NULL ORDER BY t.blacklisted_at DESC, a.id
   `);
   return {
-    groups: id => groups.all(id),
+    groups: (id, source = '') => groups.all({ id, source }),
     membership(id) {
       const row = membership.get(id);
       return { tracked: Boolean(row && row.blacklisted_at === null), blacklisted: row?.blacklisted_at != null };
@@ -106,8 +108,10 @@ function openTracking(db) {
     },
     list: () => list.all(),
     blacklist: () => blacklist.all(),
-    markRead: (id, season, episode) => markRead.run({ id, scope: 'episode', season, episode }),
-    markSeriesRead: (id, season) => markRead.run({ id, scope: season === undefined ? 'all' : 'season', season: season ?? null, episode: null }),
+    markRead: (id, season, episode, source = '') => markRead.run({ id, scope: 'episode', season, episode, source }),
+    markSeriesRead: (id, season, source = '') => markRead.run({
+      id, scope: season === undefined ? 'all' : 'season', season: season ?? null, episode: null, source
+    }),
     merge(sourceId, targetId) {
       db.prepare(`
         INSERT INTO tracked_anime (anime_id, tracked_at, blacklisted_at)

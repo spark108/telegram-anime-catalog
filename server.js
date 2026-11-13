@@ -2,6 +2,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { pipeline } = require('node:stream/promises');
 const { openCatalog } = require('./catalog');
 const { analyze, compile, example } = require('./analyzer');
 const { captionExample, previewCaption } = require('./caption');
@@ -20,6 +21,8 @@ catalog.setSetting('accessKey', accessKey);
 const telegram = createTelegram(catalog);
 const shikimori = createShikimori(catalog);
 const publisher = createPublisher(catalog, telegram);
+const playbackSecret = crypto.randomBytes(32);
+const logSession = crypto.randomUUID();
 const isLoopback = req => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress) &&
   [`127.0.0.1:${port}`, `[::1]:${port}`, `localhost:${port}`].includes(req.headers.host);
 const files = {
@@ -55,6 +58,76 @@ function requiredSource(id) {
   return source;
 }
 
+function videoKey({ sourceId, messageId, index }) {
+  if (!validKey({ sourceId, messageId, index })) throw new Error('Некорректное видео.');
+  return { sourceId, messageId, index };
+}
+
+function videoAttachment(key) {
+  const row = catalog.publicationItem(key.sourceId, key.messageId);
+  const attachment = row?.attachments[key.index];
+  if (!row?.anime_id || attachment?.kind !== 'video') {
+    throw new Error('Видео не найдено.');
+  }
+  return attachment;
+}
+
+function videoSignature(key, expires) {
+  return crypto.createHmac('sha256', playbackSecret).update(JSON.stringify([key, expires])).digest();
+}
+
+async function playVideo(req, res, params) {
+  const key = videoKey({ sourceId: params.get('sourceId'), messageId: Number(params.get('messageId')), index: Number(params.get('index')) });
+  const expires = Number(params.get('expires'));
+  const token = Buffer.from(params.get('token') || '', 'base64url');
+  const signature = videoSignature(key, expires);
+  if (!Number.isSafeInteger(expires) || expires < Date.now() || token.length !== signature.length ||
+      !crypto.timingSafeEqual(token, signature)) {
+    return send(res, 403, { error: 'Откройте проигрыватель заново.' });
+  }
+  const abort = new AbortController();
+  res.once('close', () => abort.abort());
+  const video = await telegram.videoStream(catalog.source(key.sourceId), key.messageId, videoAttachment(key));
+  if (abort.signal.aborted) return;
+  let start = 0;
+  let end = video.size - 1;
+  const range = req.headers.range;
+  if (range) {
+    const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+    if (match && match[1]) {
+      start = Number(match[1]);
+      if (match[2]) end = Math.min(end, Number(match[2]));
+    } else if (match && Number(match[2]) > 0) {
+      start = Math.max(0, video.size - Number(match[2]));
+    } else {
+      start = video.size;
+    }
+    if (start > end) {
+      res.writeHead(416, { 'Content-Range': 'bytes */' + video.size });
+      return res.end();
+    }
+  }
+  const chunks = video.read(start, end, abort.signal);
+  const first = await chunks.next();
+  if (abort.signal.aborted) {
+    await chunks.return();
+    return;
+  }
+  res.setHeader('Content-Type', video.mimeType);
+  res.setHeader('Content-Length', end - start + 1);
+  res.setHeader('Accept-Ranges', 'bytes');
+  if (range) res.setHeader('Content-Range', `bytes ${start}-${end}/${video.size}`);
+  res.statusCode = range ? 206 : 200;
+  await pipeline((async function* () {
+    try {
+      if (!first.done) yield first.value;
+      yield* chunks;
+    } finally {
+      await chunks.return();
+    }
+  })(), res, { signal: abort.signal });
+}
+
 function optionalNumber(value) {
   if (value === null || value === '') return null;
   const number = Number(value);
@@ -80,6 +153,11 @@ async function api(req, url) {
   const before = Number(query.get('before') ?? Number.MAX_SAFE_INTEGER);
   const beforeSource = query.get('beforeSource') || '~';
   switch (route) {
+    case 'GET /api/analysis-log': {
+      const after = Number(query.get('after'));
+      const cursor = query.get('session') === logSession && Number.isSafeInteger(after) && after >= 0 ? after : 0;
+      return { session: logSession, entries: catalog.analysisLog(cursor) };
+    }
     case 'GET /api/status':
       return {
         auth: telegram.status(), sources: catalog.sources().map(sourceSummary),
@@ -160,20 +238,21 @@ async function api(req, url) {
     }
     case 'GET /api/catalog':
     case 'POST /api/catalog': {
-      const { q = '', after = 0, filters } = req.method === 'POST' ? await body(req) :
+      const { q = '', after = 0, filters, includeCounts } = req.method === 'POST' ? await body(req) :
         { q: query.get('q') || '', after: Number(query.get('after') || 0) };
       if (typeof q !== 'string' || !Number.isSafeInteger(after) || after < 0) throw new Error('Некорректный запрос каталога.');
       if (filters !== undefined) checkCatalogFilters(filters);
-      const rows = catalog.list(q, after, filters);
+      const result = catalog.list(q, after, filters, includeCounts === true);
+      const rows = Array.isArray(result) ? result : result.rows;
       shikimori.prioritize(rows.map(row => row.id));
-      return rows;
+      return result;
     }
     case 'GET /api/catalog-filters':
       return catalog.filterOptions();
     case 'GET /api/view-settings':
       return catalog.setting('viewSettings') ?? {};
     case 'POST /api/view-settings': {
-      const { catalogFilters, episodeMaterial, initialCatalogFilters } = await body(req);
+      const { catalogFilters, episodeMaterial, episodeSource, initialCatalogFilters } = await body(req);
       const settings = catalog.setting('viewSettings') ?? {};
       if (initialCatalogFilters !== undefined) {
         checkCatalogFilters(initialCatalogFilters);
@@ -184,6 +263,7 @@ async function api(req, url) {
         settings.catalogFilters = catalogFilters;
       }
       if (episodeMaterial !== undefined) settings.episodeMaterial = checkEpisodeMaterial(episodeMaterial);
+      if (episodeSource !== undefined) settings.episodeSource = checkEpisodeSource(episodeSource);
       catalog.setSetting('viewSettings', settings);
       return settings;
     }
@@ -191,7 +271,7 @@ async function api(req, url) {
       return catalog.details(Number(query.get('id')), before, beforeSource);
     case 'GET /api/anime-page': {
       const id = Number(query.get('id'));
-      const page = catalog.animePage(id);
+      const page = catalog.animePage(id, checkEpisodeSource(query.get('source') ?? ''));
       if (!page) return null;
       shikimori.prioritize([page.anime.id], true);
       return page;
@@ -205,15 +285,27 @@ async function api(req, url) {
     }
     case 'GET /api/episode':
       return withPublications(catalog.episode(Number(query.get('id')), optionalNumber(query.get('season')),
-        optionalNumber(query.get('episode')), before, beforeSource, checkEpisodeMaterial(query.get('material') ?? 'all')));
+        optionalNumber(query.get('episode')), before, beforeSource, checkEpisodeMaterial(query.get('material') ?? 'all'),
+        checkEpisodeSource(query.get('source') ?? '')));
+    case 'GET /api/video-options':
+      return catalog.playbackOptions(Number(query.get('id')));
+    case 'POST /api/video-playback': {
+      const key = videoKey(await body(req));
+      videoAttachment(key);
+      if (telegram.status().step !== 'ready') throw new Error('Сначала войдите в Telegram.');
+      const expires = Date.now() + 4 * 60 * 60 * 1000;
+      const token = videoSignature(key, expires).toString('base64url');
+      return { url: '/api/video-stream?' + new URLSearchParams({ ...key, expires, token }) };
+    }
     case 'POST /api/episode-open': {
       const data = await body(req);
       const id = catalog.resolveAnime(Number(data.id));
       const season = optionalNumber(data.season);
       const episode = optionalNumber(data.episode);
       const material = checkEpisodeMaterial(data.material ?? 'all');
-      catalog.tracking.markRead(id, season, episode);
-      return withPublications(catalog.episode(id, season, episode, Number.MAX_SAFE_INTEGER, '~', material));
+      const source = checkEpisodeSource(data.source ?? '');
+      catalog.tracking.markRead(id, season, episode, source);
+      return withPublications(catalog.episode(id, season, episode, Number.MAX_SAFE_INTEGER, '~', material, source));
     }
     case 'GET /api/tracking':
       return query.get('list') === 'blacklist' ? catalog.tracking.blacklist() : catalog.tracking.list();
@@ -227,22 +319,30 @@ async function api(req, url) {
     case 'GET /api/tracking-episodes':
     case 'POST /api/tracking-episodes': {
       const reading = req.method === 'POST';
-      const request = reading ? await body(req) : { id: Number(query.get('id')) };
+      const request = reading ? await body(req) : { id: Number(query.get('id')), source: query.get('source') };
       if (reading && (!Number.isSafeInteger(request.id) || request.id < 1)) throw new Error('Некорректный тайтл.');
       const id = catalog.resolveAnime(request.id);
+      const source = checkEpisodeSource(request.source ?? '');
       if (reading) {
         const season = request.season === undefined ? undefined : optionalNumber(request.season);
-        catalog.tracking.markSeriesRead(id, season);
+        catalog.tracking.markSeriesRead(id, season, source);
       }
-      return { ...catalog.tracking.membership(id), episodes: catalog.tracking.groups(id) };
+      return { ...catalog.tracking.membership(id), episodes: catalog.tracking.groups(id, source), sources: catalog.episodeSources(id) };
     }
     case 'GET /api/anime-metadata': {
       const ids = (query.get('ids') || '').split(',').slice(0, 50).map(Number)
         .filter(id => Number.isSafeInteger(id) && id > 0);
       return catalog.metadata(ids);
     }
-    case 'GET /api/review':
-      return withPublications(catalog.review(before, beforeSource));
+    case 'GET /api/review': {
+      const source = checkEpisodeSource(query.get('source') ?? '');
+      const page = Number(query.get('page') ?? 1);
+      const pageSize = Number(query.get('pageSize') ?? 50);
+      if (!Number.isSafeInteger(page) || page < 1 || ![25, 50, 100].includes(pageSize)) {
+        throw new Error('Некорректный номер страницы или размер списка.');
+      }
+      return catalog.review(source, page, pageSize);
+    }
     case 'GET /api/publication-settings':
       return { ...publisher.settings(), captionExample };
     case 'POST /api/caption-preview': {
@@ -283,12 +383,20 @@ function checkEpisodeMaterial(material) {
   return material;
 }
 
+function checkEpisodeSource(value) {
+  if (typeof value !== 'string' || (value !== '' && !/^-?\d+(?::[1-9]\d*)?$/.test(value))) {
+    throw new Error('Некорректный источник.');
+  }
+  return value;
+}
+
 function checkCatalogFilters(filters) {
   const strings = values => Array.isArray(values) && values.every(value => typeof value === 'string');
   if (!filters || typeof filters.onlyVoiceovers !== 'boolean' || typeof filters.onlySubtitles !== 'boolean' ||
       (filters.tracking !== undefined && !['all', 'tracked', 'untracked', 'blacklisted'].includes(filters.tracking)) ||
       (filters.onlyUnread !== undefined && typeof filters.onlyUnread !== 'boolean') ||
       (filters.includeBlacklist !== undefined && typeof filters.includeBlacklist !== 'boolean') ||
+      (filters.sourceIds !== undefined && !strings(filters.sourceIds)) ||
       !strings(filters.voiceovers) || !strings(filters.subtitles) ||
       !Array.isArray(filters.years) || !filters.years.every(Number.isSafeInteger)) {
     throw new Error('Некорректные значения фильтра каталога.');
@@ -318,6 +426,9 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { 'Content-Type': file[1] + '; charset=utf-8' });
       return res.end(contents);
     }
+    if (req.method === 'GET' && url.pathname === '/api/video-stream') {
+      return await playVideo(req, res, url.searchParams);
+    }
     const supplied = Buffer.from(String(req.headers['x-catalog-key'] || ''));
     const expected = Buffer.from(accessKey);
     if (!isLoopback(req) &&
@@ -336,6 +447,8 @@ const server = http.createServer(async (req, res) => {
     const result = await api(req, url);
     send(res, result === null ? 404 : 200, result ?? { error: 'Маршрут не найден.' });
   } catch (error) {
+    if (res.destroyed) return;
+    if (res.headersSent) return res.destroy();
     send(res, 400, { error: String(error.message || error).slice(0, 600) });
   }
 });

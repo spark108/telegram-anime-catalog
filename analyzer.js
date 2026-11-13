@@ -1,6 +1,10 @@
 const vm = require('node:vm');
 
 const example = `function analyze({ text, attachments }) {
+  if (!attachments.some(file => file.kind === 'video' || file.kind === 'subtitle')) {
+    return { skip: true };
+  }
+
   const [first = ''] = text.split(/\\r?\\n/).map(line => line.trim()).filter(Boolean);
   const field = name => text.match(new RegExp('^' + name + '[ \\t]*:[ \\t]*([^\\r\\n]+)', 'im'))?.[1].trim();
   const files = new Set(attachments.flatMap(({ fileName }) => {
@@ -39,11 +43,13 @@ function normalize(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('Анализатор должен вернуть объект с полями тайтла.');
   }
+  if (value.skip === true) return { skip: true };
   const string = value => typeof value === 'string' ? value.trim().slice(0, 500) || null : null;
   const integer = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
   const subtitles = value.subtitles;
   return {
     title: string(value.title),
+    ...(string(value.seriesKey) ? { seriesKey: string(value.seriesKey) } : {}),
     fileTitle: string(value.fileTitle),
     season: integer(value.season),
     episode: integer(value.episode),

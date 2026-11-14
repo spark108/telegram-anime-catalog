@@ -4,7 +4,7 @@ const { openPublicationStore } = require('./publications');
 const { openTracking, dubbedVideo, subtitledVideo, readJoin, isUnread } = require('./tracking');
 
 const catalogReleases = `WITH releases AS NOT MATERIALIZED (
-  SELECT anime_id, source_id, attachments, json_extract(result, '$.voiceover') AS voiceover,
+  SELECT anime_id, source_id, date, attachments, json_extract(result, '$.voiceover') AS voiceover,
     json_extract(result, '$.audioVariant') AS audio_variant,
     json_extract(result, '$.subtitles') AS subtitles,
     json_extract(result, '$.subtitles.author') AS subtitle_author
@@ -12,6 +12,9 @@ const catalogReleases = `WITH releases AS NOT MATERIALIZED (
 )`;
 const catalogMetadata = 'LEFT JOIN shikimori_cache c ON c.anime_id = a.id AND c.title = a.title AND c.year IS a.year';
 const catalogYear = "COALESCE(a.year, json_extract(c.data, '$.year'))";
+const catalogDay = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Europe/Moscow', hourCycle: 'h23', hour: 'numeric', minute: 'numeric', second: 'numeric'
+});
 
 function openCatalog(file) {
   const db = new DatabaseSync(file);
@@ -364,10 +367,16 @@ function openCatalog(file) {
       onlyVoiceovers = false, onlySubtitles = false, voiceovers = [], subtitles = [], years = [], sourceIds = [],
       tracking: trackingFilter = 'all', onlyUnread = false, includeBlacklist = true
     } = {}, includeCounts = false) {
+      const now = Date.now();
+      const until = Math.floor(now / 1000);
+      const [hour, minute, second] = catalogDay.format(now).split(':').map(Number);
+      const midnight = until - (hour * 3600 + minute * 60 + second);
       const matchingTitles = `${catalogReleases},
       selected_sources AS (SELECT value FROM json_each($sourceIds)),
       matching_releases AS NOT MATERIALIZED (
-        SELECT * FROM releases WHERE $hasSources = 0 OR source_id IN (SELECT value FROM selected_sources)
+        SELECT * FROM releases
+        WHERE ($hasSources = 0 OR source_id IN (SELECT value FROM selected_sources))
+          AND ($tracking <> 'updates' OR date BETWEEN $midnight AND $until)
       )
       SELECT a.id
       FROM anime a ${catalogMetadata} LEFT JOIN tracked_anime t ON t.anime_id = a.id
@@ -405,7 +414,7 @@ function openCatalog(file) {
         ))
       `;
       const params = {
-        query: key(query), onlyVoiceovers: Number(onlyVoiceovers), onlySubtitles: Number(onlySubtitles),
+        query: key(query), midnight, until, onlyVoiceovers: Number(onlyVoiceovers), onlySubtitles: Number(onlySubtitles),
         tracking: trackingFilter, onlyUnread: Number(trackingFilter === 'tracked' && onlyUnread), includeBlacklist: Number(includeBlacklist),
         hasSources: Number(sourceIds.length > 0), sourceIds: JSON.stringify(sourceIds),
         hasYears: Number(years.length > 0), years: JSON.stringify(years),

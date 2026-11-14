@@ -512,7 +512,7 @@ function createSourceCard(id) {
 }
 
 function normalizeCatalogFilters(saved) {
-  const tracking = ['tracked', 'untracked', 'blacklisted'].includes(saved?.tracking) ? saved.tracking : 'all';
+  const tracking = ['updates', 'tracked', 'untracked', 'blacklisted'].includes(saved?.tracking) ? saved.tracking : 'all';
   return {
     onlyVoiceovers: saved?.onlyVoiceovers === true,
     onlySubtitles: saved?.onlyVoiceovers !== true && saved?.onlySubtitles === true,
@@ -722,7 +722,8 @@ async function loadCatalog(reset) {
       if (!li.isConnected) return loadCatalog(true);
       const filter = catalogFilters.tracking;
       if ((filter === 'tracked' && !tracked) || filter === 'untracked' ||
-          (filter === 'blacklisted' && !blacklisted) || (filter === 'all' && blacklisted && !catalogFilters.includeBlacklist)) {
+          (filter === 'blacklisted' && !blacklisted) ||
+          (['all', 'updates'].includes(filter) && blacklisted && !catalogFilters.includeBlacklist)) {
         return loadCatalog(true);
       }
       updatePosterMembership(link, marker, { tracked, blacklisted });

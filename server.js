@@ -397,7 +397,7 @@ function checkEpisodeSource(value) {
 function checkCatalogFilters(filters) {
   const strings = values => Array.isArray(values) && values.every(value => typeof value === 'string');
   if (!filters || typeof filters.onlyVoiceovers !== 'boolean' || typeof filters.onlySubtitles !== 'boolean' ||
-      (filters.tracking !== undefined && !['all', 'tracked', 'untracked', 'blacklisted'].includes(filters.tracking)) ||
+      (filters.tracking !== undefined && !['all', 'updates', 'tracked', 'untracked', 'blacklisted'].includes(filters.tracking)) ||
       (filters.onlyUnread !== undefined && typeof filters.onlyUnread !== 'boolean') ||
       (filters.includeBlacklist !== undefined && typeof filters.includeBlacklist !== 'boolean') ||
       (filters.sourceIds !== undefined && !strings(filters.sourceIds)) ||
